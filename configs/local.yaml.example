@@ -1,0 +1,58 @@
+# pm-mem 本地配置文件示例
+# 复制此文件为 local.yaml 并修改配置
+# 本地配置会覆盖 default.yaml 中的默认配置
+
+# 基础配置
+env: "development"  # development | testing | production
+
+# LLM配置（使用DeepSeek API）
+llm:
+  provider: "deepseek"
+  model_name: "deepseek-chat"
+
+  deepseek:
+    # 从环境变量读取，也可以直接在这里设置（不推荐，有安全风险）
+    # api_key: "your_deepseek_api_key_here"
+    # api_base: "https://api.deepseek.com"  # 可选，默认使用官方API
+
+# 或者使用模拟LLM进行开发和测试
+# llm:
+#   provider: "mock"
+
+# 记忆库配置
+memory:
+  max_entries: 500  # 开发环境可以设置较小的容量
+  persistence_path: "./data/memory-dev.json"
+  backup_dir: "./backups/dev"
+
+# Agent配置
+agent:
+  max_iterations: 6  # 开发环境可以减少迭代次数
+  retrieval_k: 3
+
+# 日志配置
+logging:
+  level: "DEBUG"  # 开发环境使用DEBUG级别
+  file_path: "./logs/pm-mem-dev.log"
+
+# 示例：生产环境配置
+# env: "production"
+# llm:
+#   provider: "deepseek"
+#   model_name: "deepseek-chat"
+# memory:
+#   max_entries: 5000
+#   persistence_path: "/var/lib/pm-mem/memory.json"
+# logging:
+#   level: "WARNING"
+#   file_path: "/var/log/pm-mem/pm-mem.log"
+
+# 示例：测试环境配置
+# env: "testing"
+# llm:
+#   provider: "mock"
+# memory:
+#   persistence_path: "./data/memory-test.json"
+# logging:
+#   level: "INFO"
+#   file_path: "./logs/pm-mem-test.log"

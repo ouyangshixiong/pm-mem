@@ -10,10 +10,10 @@ import json
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
-from memory.entry import MemoryEntry
-from memory.bank import MemoryBank
-from agent.remem_agent import ReMemAgent
-from llm.mock_llm import MockLLM
+from src.memory.entry import MemoryEntry
+from src.memory.bank import MemoryBank
+from src.agent.remem_agent import ReMemAgent
+from src.llm.mock_llm import MockLLM
 
 
 class TestEditTraces:

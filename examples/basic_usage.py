@@ -7,6 +7,10 @@ pm-mem 基本用法示例
 import os
 import sys
 from pathlib import Path
+import dotenv
+
+# 加载.env文件中的环境变量
+dotenv.load_dotenv()
 
 # 添加父目录到Python路径，以便导入pm-mem
 sys.path.insert(0, str(Path(__file__).parent.parent))

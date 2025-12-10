@@ -62,6 +62,8 @@ development-tasks.md
 quality-tasks.md
 quality_validation_report*.md
 sprint-coordination.md
+pm*_quality_report.md
+sprint_delivery_report*.md
 
 # OS
 .DS_Store

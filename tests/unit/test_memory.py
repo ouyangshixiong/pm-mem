@@ -5,6 +5,7 @@
 import pytest
 import sys
 import os
+import json
 
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
@@ -12,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 from memory.entry import MemoryEntry
 from memory.bank import MemoryBank
 from memory.editor import RefineEditor
+from memory.retrieval_result import RetrievalResult
 from datetime import datetime
 
 
@@ -157,16 +159,37 @@ class TestMemoryBank:
         self.bank.add(self.entry2)
         self.bank.add(self.entry3)
 
-        # 创建模拟LLM
+        # 创建模拟LLM，返回有效的JSON格式
         class MockLLM:
             def __call__(self, prompt):
-                # 总是返回前两个索引
-                return "0,1"
+                # 返回有效的JSON响应
+                return json.dumps({
+                    "results": [
+                        {"index": 0, "relevance_score": 0.9, "explanation": "相关"},
+                        {"index": 1, "relevance_score": 0.8, "explanation": "相关"},
+                        {"index": 2, "relevance_score": 0.7, "explanation": "相关"}
+                    ]
+                })
 
         mock_llm = MockLLM()
-        results = self.bank.retrieve(mock_llm, "测试查询", k=2)
+
+        # 测试包含解释的检索
+        results = self.bank.retrieve(mock_llm, "测试查询", k=2, include_explanations=True)
 
         assert len(results) == 2
+        # 现在返回的是RetrievalResult对象
+        assert isinstance(results[0], RetrievalResult)
+        assert isinstance(results[1], RetrievalResult)
+        assert results[0].memory_entry == self.entry1
+        assert results[1].memory_entry == self.entry2
+
+        # 测试不包含解释的检索（向后兼容）
+        results = self.bank.retrieve(mock_llm, "测试查询", k=2, include_explanations=False)
+
+        assert len(results) == 2
+        # 现在返回的是MemoryEntry对象
+        assert isinstance(results[0], MemoryEntry)
+        assert isinstance(results[1], MemoryEntry)
         assert results[0] == self.entry1
         assert results[1] == self.entry2
 

@@ -10,9 +10,9 @@ import tempfile
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
-from agent.remem_agent import ReMemAgent
-from llm.mock_llm import MockLLM
-from memory.bank import MemoryBank
+from src.agent.remem_agent import ReMemAgent
+from src.llm.mock_llm import MockLLM
+from src.memory.bank import MemoryBank
 
 
 class TestReMemAgent:
@@ -85,7 +85,7 @@ class TestReMemAgent:
         self.mock_llm.responses["请选择动作"] = ["refine", "act"]
 
         # 添加一些初始记忆用于Refine操作
-        from memory.entry import MemoryEntry
+        from src.memory.entry import MemoryEntry
         self.agent.M.add(MemoryEntry("初始任务", "初始输出", "初始反馈", "初始标签"))
 
         task_input = "需要修改记忆的任务"
@@ -130,7 +130,7 @@ class TestReMemAgent:
     def test_memory_retrieval(self):
         """测试记忆检索功能"""
         # 添加一些测试记忆
-        from memory.entry import MemoryEntry
+        from src.memory.entry import MemoryEntry
         self.agent.M.add(MemoryEntry("相关任务1", "输出1", "反馈1", "相关标签"))
         self.agent.M.add(MemoryEntry("无关任务", "输出2", "反馈2", "无关标签"))
         self.agent.M.add(MemoryEntry("相关任务2", "输出3", "反馈3", "相关标签"))
@@ -156,7 +156,7 @@ class TestReMemAgent:
     def test_save_and_load_memory(self):
         """测试记忆保存和加载"""
         # 添加一些测试记忆
-        from memory.entry import MemoryEntry
+        from src.memory.entry import MemoryEntry
         self.agent.M.add(MemoryEntry("测试保存", "测试输出", "测试反馈", "测试标签"))
 
         # 保存记忆
@@ -178,7 +178,7 @@ class TestReMemAgent:
     def test_apply_delta(self):
         """测试应用Refine编辑操作"""
         # 添加一些初始记忆
-        from memory.entry import MemoryEntry
+        from src.memory.entry import MemoryEntry
         self.agent.M.add(MemoryEntry("记忆1", "输出1", "反馈1", "标签1"))
         self.agent.M.add(MemoryEntry("记忆2", "输出2", "反馈2", "标签2"))
         self.agent.M.add(MemoryEntry("记忆3", "输出3", "反馈3", "标签3"))

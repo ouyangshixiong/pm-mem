@@ -4,14 +4,17 @@ ReMem Agent主循环
 实现完整的Think/Refine/Act状态机，支持最大迭代次数限制和强制终止机制。
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import logging
 import re
+from datetime import datetime
 
-from llm.llm_interface import LLMInterface
-from memory.bank import MemoryBank
-from memory.editor import RefineEditor
-from memory.persistence import MemoryPersistence
+from ..llm.llm_interface import LLMInterface
+from ..memory.bank import MemoryBank
+from ..memory.entry import MemoryEntry
+from ..memory.retrieval_result import RetrievalResult
+from ..memory.editor import RefineEditor
+from ..memory.persistence import MemoryPersistence
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,7 @@ class ReMemAgent:
         persist_path: str = "./data/memory.json",
         max_iterations: int = 8,
         retrieval_k: int = 5,
+        include_explanations: bool = True,
     ):
         """
         初始化ReMem Agent
@@ -36,19 +40,23 @@ class ReMemAgent:
             persist_path: 持久化存储路径
             max_iterations: 最大迭代次数
             retrieval_k: 检索返回的最相关记忆数量
+            include_explanations: 是否包含相关性解释
         """
         self.llm = llm
         self.M = memory_bank or MemoryBank()
         self.persistence = MemoryPersistence(persist_path)
         self.max_iterations = max_iterations
         self.retrieval_k = retrieval_k
+        self.include_explanations = include_explanations
+        self.edit_traces: List[Dict[str, Any]] = []  # 编辑轨迹记录
 
         # 加载现有记忆
         self.M = self.persistence.load(self.M)
 
         logger.info(
             f"ReMem Agent已初始化 - 最大迭代次数: {max_iterations}, "
-            f"检索数量: {retrieval_k}, 记忆条目: {len(self.M)}"
+            f"检索数量: {retrieval_k}, 记忆条目: {len(self.M)}, "
+            f"包含解释: {include_explanations}"
         )
 
     def run_task(self, task_input: str) -> Dict[str, Any]:
@@ -70,9 +78,16 @@ class ReMemAgent:
         for iteration in range(self.max_iterations):
             logger.debug(f"第 {iteration + 1}/{self.max_iterations} 次迭代")
 
-            # 检索相关记忆
-            retrieved_memories = self.M.retrieve(self.llm, task_input, k=self.retrieval_k)
-            retrieved_text = "\n".join([e.to_text() for e in retrieved_memories])
+            # 检索相关记忆（使用新的检索方法）
+            retrieved_memories = self.M.retrieve(
+                self.llm,
+                task_input,
+                k=self.retrieval_k,
+                include_explanations=self.include_explanations
+            )
+
+            # 构建检索文本（处理RetrievalResult和MemoryEntry两种类型）
+            retrieved_text = self._format_retrieved_memories(retrieved_memories)
 
             # 让LLM选择动作
             action = self._select_action(task_input, retrieved_text, traces)
@@ -87,8 +102,8 @@ class ReMemAgent:
                 delta, raw_cmd = self._refine(task_input, traces)
                 traces.append(raw_cmd)
 
-                # 应用编辑操作
-                self._apply_delta(delta)
+                # 应用编辑操作（增强版，包含轨迹记录）
+                self._apply_delta_enhanced(delta, raw_cmd, iteration)
                 logger.debug(f"Refine: {raw_cmd}")
 
             elif action_lower == "act":
@@ -108,6 +123,8 @@ class ReMemAgent:
                     "memory_size": len(self.M),
                     "iterations": iteration + 1,
                     "retrieved_count": len(retrieved_memories),
+                    "retrieved_memories": self._get_retrieval_details(retrieved_memories),
+                    "edit_traces": self.get_edit_traces(),  # 返回编辑轨迹
                     "status": "completed",
                 }
 
@@ -127,6 +144,8 @@ class ReMemAgent:
                     "memory_size": len(self.M),
                     "iterations": iteration + 1,
                     "retrieved_count": len(retrieved_memories),
+                    "retrieved_memories": self._get_retrieval_details(retrieved_memories),
+                    "edit_traces": self.get_edit_traces(),  # 返回编辑轨迹
                     "status": "forced",
                 }
 
@@ -143,8 +162,61 @@ class ReMemAgent:
             "memory_size": len(self.M),
             "iterations": self.max_iterations,
             "retrieved_count": len(retrieved_memories),
+            "retrieved_memories": self._get_retrieval_details(retrieved_memories),
+            "edit_traces": self.get_edit_traces(),  # 返回编辑轨迹
             "status": "max_iterations_exceeded",
         }
+
+    def _format_retrieved_memories(self, retrieved_memories: List[Union[MemoryEntry, RetrievalResult]]) -> str:
+        """
+        格式化检索到的记忆，支持RetrievalResult和MemoryEntry两种类型
+
+        Args:
+            retrieved_memories: 检索结果列表
+
+        Returns:
+            格式化的文本
+        """
+        formatted = []
+        for i, item in enumerate(retrieved_memories):
+            if isinstance(item, RetrievalResult):
+                # 如果是RetrievalResult，包含评分和解释
+                formatted.append(
+                    f"[记忆 {i+1} - 相关性评分: {item.relevance_score:.2f}]\n"
+                    f"{item.memory_entry.to_text()}\n"
+                    f"[相关性解释]: {item.explanation}\n"
+                )
+            else:
+                # 如果是MemoryEntry，只显示内容
+                formatted.append(f"[记忆 {i+1}]\n{item.to_text()}\n")
+
+        return "\n".join(formatted)
+
+    def _get_retrieval_details(self, retrieved_memories: List[Union[MemoryEntry, RetrievalResult]]) -> List[Dict[str, Any]]:
+        """
+        获取检索结果的详细信息
+
+        Args:
+            retrieved_memories: 检索结果列表
+
+        Returns:
+            详细信息列表
+        """
+        details = []
+        for item in retrieved_memories:
+            if isinstance(item, RetrievalResult):
+                details.append({
+                    "type": "RetrievalResult",
+                    "memory_entry": item.memory_entry.to_dict(),
+                    "relevance_score": item.relevance_score,
+                    "explanation": item.explanation
+                })
+            else:
+                details.append({
+                    "type": "MemoryEntry",
+                    "memory_entry": item.to_dict()
+                })
+        return details
 
     def _select_action(self, task_input: str, retrieved_text: str, traces: List[str]) -> str:
         """选择下一步动作（Think/Refine/Act）"""
@@ -466,10 +538,35 @@ Act: [你的答案或动作]
             return "Act: 执行动作时出现错误"
 
     def _apply_delta(self, delta: Dict[str, Any]) -> None:
-        """应用Refine编辑操作"""
+        """应用Refine编辑操作（向后兼容）"""
+        self._apply_delta_enhanced(delta, "legacy_command", 0)
+
+    def _apply_delta_enhanced(self, delta: Dict[str, Any], raw_cmd: str, iteration: int) -> None:
+        """
+        增强版应用Refine编辑操作，包含轨迹记录
+
+        Args:
+            delta: 编辑操作字典
+            raw_cmd: 原始命令字符串
+            iteration: 当前迭代次数
+        """
         try:
             # 记录原始记忆数量
             original_count = len(self.M.entries)
+            original_entries = [e.id for e in self.M.entries]
+
+            # 记录操作开始
+            trace_record = {
+                "timestamp": datetime.now().isoformat(),
+                "iteration": iteration,
+                "raw_command": raw_cmd,
+                "parsed_delta": delta,
+                "original_memory_count": original_count,
+                "original_entry_ids": original_entries,
+                "operations": [],
+                "success": True,
+                "error": None
+            }
 
             # 执行删除操作（从大到小排序，避免索引变化）
             if delta["delete"]:
@@ -477,10 +574,18 @@ Act: [你的答案或动作]
                 self.M.delete(delete_indices)
                 logger.info(f"Refine: 删除了 {len(delete_indices)} 条记忆")
 
+                trace_record["operations"].append({
+                    "type": "delete",
+                    "indices": delete_indices,
+                    "count": len(delete_indices)
+                })
+
             # 执行添加操作
             if delta["add"]:
-                from memory.entry import MemoryEntry
+                from ..memory.entry import MemoryEntry
                 added_count = 0
+                added_entries = []
+
                 for text in delta["add"]:
                     if text and isinstance(text, str):
                         new_entry = MemoryEntry(
@@ -491,11 +596,21 @@ Act: [你的答案或动作]
                         )
                         self.M.add(new_entry)
                         added_count += 1
+                        added_entries.append(new_entry.id)
+
                 logger.info(f"Refine: 添加了 {added_count} 条新记忆")
+
+                trace_record["operations"].append({
+                    "type": "add",
+                    "count": added_count,
+                    "added_entry_ids": added_entries
+                })
 
             # 执行合并操作
             if delta["merge"]:
                 merged_count = 0
+                merged_pairs = []
+
                 for idx1, idx2 in delta["merge"]:
                     try:
                         # 调整索引（因为之前的删除操作可能改变了索引）
@@ -505,13 +620,23 @@ Act: [你的答案或动作]
                         if adjusted_idx1 is not None and adjusted_idx2 is not None:
                             self.M.merge(adjusted_idx1, adjusted_idx2)
                             merged_count += 1
+                            merged_pairs.append((idx1, idx2))
                     except Exception as e:
                         logger.warning(f"合并失败 {idx1}&{idx2}: {e}")
+
                 logger.info(f"Refine: 合并了 {merged_count} 对记忆")
+
+                trace_record["operations"].append({
+                    "type": "merge",
+                    "pairs": merged_pairs,
+                    "count": merged_count
+                })
 
             # 执行重标记操作
             if delta["relabel"]:
                 relabeled_count = 0
+                relabeled_items = []
+
                 for idx, tag in delta["relabel"]:
                     try:
                         # 调整索引
@@ -519,16 +644,50 @@ Act: [你的答案或动作]
                         if adjusted_idx is not None:
                             self.M.relabel(adjusted_idx, tag)
                             relabeled_count += 1
+                            relabeled_items.append((idx, tag))
                     except Exception as e:
                         logger.warning(f"重标记失败 {idx}: {e}")
+
                 logger.info(f"Refine: 重标记了 {relabeled_count} 条记忆")
+
+                trace_record["operations"].append({
+                    "type": "relabel",
+                    "items": relabeled_items,
+                    "count": relabeled_count
+                })
 
             # 记录最终结果
             final_count = len(self.M.entries)
+            final_entries = [e.id for e in self.M.entries]
+
+            trace_record.update({
+                "final_memory_count": final_count,
+                "final_entry_ids": final_entries,
+                "memory_change": final_count - original_count
+            })
+
+            # 保存轨迹记录
+            self.edit_traces.append(trace_record)
+
+            # 限制轨迹记录大小
+            if len(self.edit_traces) > 100:
+                self.edit_traces.pop(0)
+
             logger.info(f"Refine完成: 记忆数量从 {original_count} 变为 {final_count}")
 
         except Exception as e:
             logger.error(f"应用Refine操作失败: {e}")
+
+            # 记录失败轨迹
+            trace_record = {
+                "timestamp": datetime.now().isoformat(),
+                "iteration": iteration,
+                "raw_command": raw_cmd,
+                "parsed_delta": delta,
+                "success": False,
+                "error": str(e)
+            }
+            self.edit_traces.append(trace_record)
 
     def _adjust_index(self, idx: int, deleted_indices: List[int]) -> Optional[int]:
         """
@@ -551,7 +710,7 @@ Act: [你的答案或动作]
 
     def _add_new_memory(self, task_input: str, action_result: str, feedback: str) -> None:
         """添加新记忆条目"""
-        from memory.entry import MemoryEntry
+        from ..memory.entry import MemoryEntry
 
         # 提取实际动作内容（去掉"Act:"前缀）
         if action_result.startswith("Act:"):
@@ -577,13 +736,85 @@ Act: [你的答案或动作]
         # 这里返回模拟反馈
         return "success"
 
+    def get_edit_traces(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        获取编辑轨迹记录
+
+        Args:
+            limit: 返回的最大记录数
+
+        Returns:
+            编辑轨迹记录列表
+        """
+        return self.edit_traces[-limit:] if self.edit_traces else []
+
+    def clear_edit_traces(self) -> None:
+        """清空编辑轨迹记录"""
+        self.edit_traces.clear()
+
+    def get_edit_statistics(self) -> Dict[str, Any]:
+        """
+        获取编辑统计信息
+
+        Returns:
+            包含编辑统计信息的字典
+        """
+        if not self.edit_traces:
+            return {
+                "total_edits": 0,
+                "successful_edits": 0,
+                "failed_edits": 0,
+                "delete_count": 0,
+                "add_count": 0,
+                "merge_count": 0,
+                "relabel_count": 0
+            }
+
+        total_edits = len(self.edit_traces)
+        successful_edits = sum(1 for trace in self.edit_traces if trace.get("success", False))
+        failed_edits = total_edits - successful_edits
+
+        # 统计各类操作数量
+        delete_count = 0
+        add_count = 0
+        merge_count = 0
+        relabel_count = 0
+
+        for trace in self.edit_traces:
+            if trace.get("success", False) and "operations" in trace:
+                for op in trace["operations"]:
+                    op_type = op.get("type")
+                    if op_type == "delete":
+                        delete_count += op.get("count", 0)
+                    elif op_type == "add":
+                        add_count += op.get("count", 0)
+                    elif op_type == "merge":
+                        merge_count += op.get("count", 0)
+                    elif op_type == "relabel":
+                        relabel_count += op.get("count", 0)
+
+        return {
+            "total_edits": total_edits,
+            "successful_edits": successful_edits,
+            "failed_edits": failed_edits,
+            "delete_count": delete_count,
+            "add_count": add_count,
+            "merge_count": merge_count,
+            "relabel_count": relabel_count,
+            "latest_edit": self.edit_traces[-1] if self.edit_traces else None
+        }
+
     def get_statistics(self) -> Dict[str, Any]:
         """获取Agent统计信息"""
         mem_stats = self.M.get_statistics()
+        edit_stats = self.get_edit_statistics()
+
         return {
             "memory_statistics": mem_stats,
+            "edit_statistics": edit_stats,
             "max_iterations": self.max_iterations,
             "retrieval_k": self.retrieval_k,
+            "include_explanations": self.include_explanations,
             "persistence_path": self.persistence.filepath,
         }
 

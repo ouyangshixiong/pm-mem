@@ -5,10 +5,31 @@
 """
 
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import logging
+from dataclasses import dataclass
+from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+class CommandType(Enum):
+    """命令类型枚举"""
+    DELETE = "DELETE"
+    ADD = "ADD"
+    MERGE = "MERGE"
+    RELABEL = "RELABEL"
+
+
+@dataclass
+class ParseResult:
+    """解析结果数据类"""
+    command_type: CommandType
+    indices: List[int] = None
+    text: str = None
+    pairs: List[Tuple[int, int]] = None
+    relabels: List[Tuple[int, str]] = None
+    error: str = None
 
 
 class RefineEditor:
@@ -39,29 +60,29 @@ class RefineEditor:
             return delta
 
         # 标准化命令：去除多余空格，统一大小写
-        normalized = cmd.strip().lower()
+        normalized = cmd.strip()
 
         # 按分号分割多条命令
         command_segments = [s.strip() for s in normalized.split(";") if s.strip()]
 
         for segment in command_segments:
             try:
-                if segment.startswith("delete"):
-                    indices = RefineEditor._parse_delete(segment)
-                    delta["delete"].extend(indices)
+                # 使用增强的解析方法
+                parse_result = RefineEditor._parse_segment(segment)
 
-                elif segment.startswith("add{"):
-                    text = RefineEditor._parse_add(segment)
-                    if text:
-                        delta["add"].append(text)
+                if parse_result.error:
+                    logger.warning(f"解析命令段失败 '{segment}': {parse_result.error}")
+                    continue
 
-                elif segment.startswith("merge"):
-                    pairs = RefineEditor._parse_merge(segment)
-                    delta["merge"].extend(pairs)
-
-                elif segment.startswith("relabel"):
-                    relabels = RefineEditor._parse_relabel(segment)
-                    delta["relabel"].extend(relabels)
+                if parse_result.command_type == CommandType.DELETE:
+                    delta["delete"].extend(parse_result.indices)
+                elif parse_result.command_type == CommandType.ADD:
+                    if parse_result.text:
+                        delta["add"].append(parse_result.text)
+                elif parse_result.command_type == CommandType.MERGE:
+                    delta["merge"].extend(parse_result.pairs)
+                elif parse_result.command_type == CommandType.RELABEL:
+                    delta["relabel"].extend(parse_result.relabels)
 
             except Exception as e:
                 logger.warning(f"解析命令段失败 '{segment}': {e}")
@@ -70,73 +91,176 @@ class RefineEditor:
         return delta
 
     @staticmethod
-    def _parse_delete(segment: str) -> List[int]:
-        """解析DELETE命令"""
-        # 匹配格式: DELETE 1 或 DELETE 1,2,3
-        pattern = r"delete\s+([\d\s,]+)"
-        match = re.search(pattern, segment)
+    def _parse_segment(segment: str) -> ParseResult:
+        """解析单个命令段"""
+        # 检查命令类型
+        segment_upper = segment.upper()
+
+        if segment_upper.startswith("DELETE"):
+            return RefineEditor._parse_delete_enhanced(segment)
+        elif segment_upper.startswith("ADD{"):
+            return RefineEditor._parse_add_enhanced(segment)
+        elif segment_upper.startswith("MERGE"):
+            return RefineEditor._parse_merge_enhanced(segment)
+        elif segment_upper.startswith("RELABEL"):
+            return RefineEditor._parse_relabel_enhanced(segment)
+        else:
+            return ParseResult(
+                command_type=None,
+                error=f"未知命令类型: {segment.split()[0] if segment.split() else segment}"
+            )
+
+    @staticmethod
+    def _parse_delete_enhanced(segment: str) -> ParseResult:
+        """增强版DELETE命令解析"""
+        # 支持多种格式: DELETE 1, DELETE 1,2,3, DELETE 1 2 3
+        pattern = r"^DELETE\s+([\d\s,]+)$"
+        match = re.match(pattern, segment, re.IGNORECASE)
 
         if not match:
-            return []
+            return ParseResult(
+                command_type=CommandType.DELETE,
+                error=f"DELETE命令格式错误: {segment}"
+            )
 
         numbers_str = match.group(1)
         indices = []
-        for num in numbers_str.split(","):
+
+        # 支持逗号分隔和空格分隔
+        for num in re.split(r'[,\s]+', numbers_str):
             num = num.strip()
-            if num.isdigit():
+            if num and num.isdigit():
                 indices.append(int(num))
 
-        return indices
+        if not indices:
+            return ParseResult(
+                command_type=CommandType.DELETE,
+                error=f"DELETE命令中没有有效的索引: {segment}"
+            )
+
+        # 检查重复索引
+        if len(indices) != len(set(indices)):
+            return ParseResult(
+                command_type=CommandType.DELETE,
+                error=f"DELETE命令中有重复索引: {segment}"
+            )
+
+        return ParseResult(
+            command_type=CommandType.DELETE,
+            indices=indices
+        )
 
     @staticmethod
-    def _parse_add(segment: str) -> str:
-        """解析ADD命令"""
-        # 匹配格式: ADD{text}
-        pattern = r"add\{([^}]+)\}"
-        match = re.search(pattern, segment)
+    def _parse_add_enhanced(segment: str) -> ParseResult:
+        """增强版ADD命令解析"""
+        # 支持多种格式: ADD{text}, ADD {text}, ADD{ text }
+        pattern = r"^ADD\s*\{([^}]+)\}$"
+        match = re.match(pattern, segment, re.IGNORECASE)
 
         if not match:
-            # 尝试匹配原始命令（可能保留大小写）
-            alt_pattern = r"ADD\{([^}]+)\}"
-            match = re.search(alt_pattern, cmd := segment)
-            if not match:
-                return ""
+            return ParseResult(
+                command_type=CommandType.ADD,
+                error=f"ADD命令格式错误: {segment}"
+            )
 
-        return match.group(1).strip()
+        text = match.group(1).strip()
+
+        if not text:
+            return ParseResult(
+                command_type=CommandType.ADD,
+                error=f"ADD命令内容为空: {segment}"
+            )
+
+        return ParseResult(
+            command_type=CommandType.ADD,
+            text=text
+        )
 
     @staticmethod
-    def _parse_merge(segment: str) -> List[Tuple[int, int]]:
-        """解析MERGE命令"""
-        # 匹配格式: MERGE 1&2 或 MERGE 1&2; MERGE 3&4
+    def _parse_merge_enhanced(segment: str) -> ParseResult:
+        """增强版MERGE命令解析"""
+        # 支持多种格式: MERGE 1&2, MERGE 1 & 2, MERGE 1&2; MERGE 3&4
         pairs = []
 
         # 提取所有数字对
-        pattern = r"merge\s*(\d+)\s*&\s*(\d+)"
-        matches = re.findall(pattern, segment)
+        pattern = r"MERGE\s*(\d+)\s*&\s*(\d+)"
+        matches = re.findall(pattern, segment, re.IGNORECASE)
+
+        if not matches:
+            return ParseResult(
+                command_type=CommandType.MERGE,
+                error=f"MERGE命令格式错误: {segment}"
+            )
 
         for idx1_str, idx2_str in matches:
             if idx1_str.isdigit() and idx2_str.isdigit():
-                pairs.append((int(idx1_str), int(idx2_str)))
+                idx1, idx2 = int(idx1_str), int(idx2_str)
 
-        return pairs
+                # 检查是否合并同一个索引
+                if idx1 == idx2:
+                    return ParseResult(
+                        command_type=CommandType.MERGE,
+                        error=f"MERGE命令不能合并同一个索引: {idx1}"
+                    )
+
+                # 检查重复合并对
+                if (idx1, idx2) in pairs or (idx2, idx1) in pairs:
+                    return ParseResult(
+                        command_type=CommandType.MERGE,
+                        error=f"MERGE命令中有重复的合并对: {idx1}&{idx2}"
+                    )
+
+                pairs.append((idx1, idx2))
+
+        if not pairs:
+            return ParseResult(
+                command_type=CommandType.MERGE,
+                error=f"MERGE命令中没有有效的索引对: {segment}"
+            )
+
+        return ParseResult(
+            command_type=CommandType.MERGE,
+            pairs=pairs
+        )
 
     @staticmethod
-    def _parse_relabel(segment: str) -> List[Tuple[int, str]]:
-        """解析RELABEL命令"""
-        # 匹配格式: RELABEL 1 new-tag
-        pattern = r"relabel\s+(\d+)\s+(.+)"
-        match = re.search(pattern, segment)
+    def _parse_relabel_enhanced(segment: str) -> ParseResult:
+        """增强版RELABEL命令解析"""
+        # 支持多种格式: RELABEL 1 new-tag, RELABEL 1 "new tag"
+        pattern = r"^RELABEL\s+(\d+)\s+(.+)$"
+        match = re.match(pattern, segment, re.IGNORECASE)
 
         if not match:
-            return []
+            return ParseResult(
+                command_type=CommandType.RELABEL,
+                error=f"RELABEL命令格式错误: {segment}"
+            )
 
         idx_str = match.group(1)
         new_tag = match.group(2).strip()
 
-        if idx_str.isdigit():
-            return [(int(idx_str), new_tag)]
+        # 去除可能的引号
+        if new_tag.startswith('"') and new_tag.endswith('"'):
+            new_tag = new_tag[1:-1]
+        elif new_tag.startswith("'") and new_tag.endswith("'"):
+            new_tag = new_tag[1:-1]
 
-        return []
+        if not idx_str.isdigit():
+            return ParseResult(
+                command_type=CommandType.RELABEL,
+                error=f"RELABEL命令索引不是数字: {idx_str}"
+            )
+
+        if not new_tag:
+            return ParseResult(
+                command_type=CommandType.RELABEL,
+                error=f"RELABEL命令新标签为空: {segment}"
+            )
+
+        return ParseResult(
+            command_type=CommandType.RELABEL,
+            relabels=[(int(idx_str), new_tag)]
+        )
 
     @staticmethod
     def validate_command(cmd: str) -> Tuple[bool, str]:
@@ -152,27 +276,17 @@ class RefineEditor:
         if not cmd or not cmd.strip():
             return True, "空命令"
 
-        normalized = cmd.strip().lower()
+        normalized = cmd.strip()
         segments = [s.strip() for s in normalized.split(";") if s.strip()]
 
         for i, segment in enumerate(segments):
-            if segment.startswith("delete"):
-                if not re.match(r"delete\s+[\d\s,]+$", segment):
-                    return False, f"第{i+1}段DELETE命令格式错误: {segment}"
+            # 使用增强的解析方法进行验证
+            parse_result = RefineEditor._parse_segment(segment)
 
-            elif segment.startswith("add{"):
-                if not re.match(r"add\{[^}]+\}$", segment):
-                    return False, f"第{i+1}段ADD命令格式错误: {segment}"
+            if parse_result.error:
+                return False, f"第{i+1}段命令错误: {parse_result.error}"
 
-            elif segment.startswith("merge"):
-                if not re.match(r"merge\s*\d+\s*&\s*\d+$", segment):
-                    return False, f"第{i+1}段MERGE命令格式错误: {segment}"
-
-            elif segment.startswith("relabel"):
-                if not re.match(r"relabel\s+\d+\s+.+$", segment):
-                    return False, f"第{i+1}段RELABEL命令格式错误: {segment}"
-
-            else:
+            if parse_result.command_type is None:
                 return False, f"第{i+1}段包含未知命令: {segment}"
 
         return True, "命令格式合法"
@@ -199,19 +313,69 @@ class RefineEditor:
         commands = []
 
         if delete:
-            indices_str = ",".join(str(i) for i in delete)
+            # 去重并排序
+            unique_indices = sorted(set(delete))
+            indices_str = ",".join(str(i) for i in unique_indices)
             commands.append(f"DELETE {indices_str}")
 
         if add:
             for text in add:
-                commands.append(f"ADD{{{text}}}")
+                if text and isinstance(text, str):
+                    # 确保文本中没有未匹配的花括号
+                    safe_text = text.replace("}", "}}")
+                    commands.append(f"ADD{{{safe_text}}}")
 
         if merge:
+            # 去重并排序
+            unique_pairs = []
+            seen = set()
             for idx1, idx2 in merge:
+                pair = tuple(sorted((idx1, idx2)))
+                if pair not in seen:
+                    seen.add(pair)
+                    unique_pairs.append(pair)
+
+            for idx1, idx2 in unique_pairs:
                 commands.append(f"MERGE {idx1}&{idx2}")
 
         if relabel:
+            # 去重
+            unique_relabels = []
+            seen_indices = set()
             for idx, tag in relabel:
-                commands.append(f"RELABEL {idx} {tag}")
+                if idx not in seen_indices:
+                    seen_indices.add(idx)
+                    unique_relabels.append((idx, tag))
+
+            for idx, tag in unique_relabels:
+                # 如果标签包含空格，添加引号
+                if " " in tag:
+                    commands.append(f'RELABEL {idx} "{tag}"')
+                else:
+                    commands.append(f"RELABEL {idx} {tag}")
 
         return "; ".join(commands)
+
+    @staticmethod
+    def get_command_summary(cmd: str) -> Dict[str, Any]:
+        """
+        获取命令摘要信息
+
+        Args:
+            cmd: Refine命令字符串
+
+        Returns:
+            包含命令摘要信息的字典
+        """
+        delta = RefineEditor.parse_command(cmd)
+
+        return {
+            "total_operations": len(delta["delete"]) + len(delta["add"]) +
+                               len(delta["merge"]) + len(delta["relabel"]),
+            "delete_count": len(delta["delete"]),
+            "add_count": len(delta["add"]),
+            "merge_count": len(delta["merge"]),
+            "relabel_count": len(delta["relabel"]),
+            "is_valid": RefineEditor.validate_command(cmd)[0],
+            "operations": delta
+        }

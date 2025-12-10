@@ -5,7 +5,7 @@
 """
 
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable, List, Union
 import logging
 
 from .llm_interface import LLMInterface
@@ -22,7 +22,7 @@ class MockLLM(LLMInterface):
 
     def __init__(
         self,
-        responses: Optional[Dict[str, str]] = None,
+        responses: Optional[Dict[str, Any]] = None,
         default_response: str = "模拟LLM响应",
         enable_pattern_matching: bool = True,
     ):
@@ -30,7 +30,7 @@ class MockLLM(LLMInterface):
         初始化模拟LLM
 
         Args:
-            responses: 预设响应映射 {关键词: 响应文本}
+            responses: 预设响应映射 {关键词: 响应文本或可调用函数}
             default_response: 默认响应文本
             enable_pattern_matching: 是否启用模式匹配
         """
@@ -50,8 +50,8 @@ class MockLLM(LLMInterface):
                 # 检索排序请求
                 "请仅输出索引列表": "0,1,2",
                 "请僅輸出索引列表": "0,1,2",
-                # 动作选择
-                "请选择动作": self._get_action_sequence(),
+                # 动作选择 - 使用可调用函数
+                "请选择动作": self._get_action_sequence,
                 # Refine命令
                 "refine:": "DELETE 0; ADD {nginx 反向代理已用于绕过阿里云安全组对 3000 端口的封禁}",
                 # Think推理
@@ -100,34 +100,53 @@ class MockLLM(LLMInterface):
         """查找匹配的响应文本"""
         prompt_lower = prompt.lower()
 
+        # 首先检查是否是动作选择提示
+        if "请选择下一步动作" in prompt_lower or "请选择动作" in prompt_lower:
+            response = self.responses.get("请选择动作", self._get_action_sequence)
+            return self._process_response(response)
+
         if self.enable_pattern_matching:
-            # 模式匹配
+            # 模式匹配 - 检查是否包含关键词
             for pattern, response in self.responses.items():
                 pattern_lower = pattern.lower()
+                # 更宽松的匹配：检查是否包含关键词
                 if pattern_lower in prompt_lower:
-                    # 如果是动作选择模式，需要动态获取
-                    if pattern_lower == "请选择动作":
-                        return self._get_action_sequence()
-                    return response
+                    return self._process_response(response)
 
-        # 检查是否包含特定关键词
+        # 检查是否包含特定关键词（更宽松的匹配）
         if "索引" in prompt_lower and "列表" in prompt_lower:
-            return self.responses.get("请仅输出索引列表", "0,1")
-
-        if "选择动作" in prompt_lower:
-            return self._get_action_sequence()
+            response = self.responses.get("请仅输出索引列表", "0,1")
+            return self._process_response(response)
 
         if "refine:" in prompt_lower:
-            return self.responses.get("refine:", "DELETE 0")
+            response = self.responses.get("refine:", "DELETE 0")
+            return self._process_response(response)
 
         if "think:" in prompt_lower:
-            return self.responses.get("think:", "Think: 模拟推理过程")
+            response = self.responses.get("think:", "Think: 模拟推理过程")
+            return self._process_response(response)
 
         if "act:" in prompt_lower:
-            return self.responses.get("act:", "Act: 模拟动作")
+            response = self.responses.get("act:", "Act: 模拟动作")
+            return self._process_response(response)
 
         # 返回默认响应
         return self.default_response
+
+    def _process_response(self, response: Any) -> str:
+        """处理响应，确保返回字符串"""
+        if callable(response):
+            return response()
+        elif isinstance(response, list):
+            # 处理列表响应：根据调用计数器选择响应
+            if self.call_counter < len(response):
+                result = response[self.call_counter]
+            else:
+                result = response[-1] if response else self.default_response
+            self.call_counter += 1
+            return str(result)
+        else:
+            return str(response)
 
     def get_model_info(self) -> Dict[str, Any]:
         """获取模拟LLM信息"""
@@ -148,13 +167,13 @@ class MockLLM(LLMInterface):
         self.call_history = []
         self.call_counter = 0
 
-    def add_response(self, pattern: str, response: str) -> None:
+    def add_response(self, pattern: str, response: Any) -> None:
         """
         添加响应模式
 
         Args:
             pattern: 匹配模式（关键词）
-            response: 响应文本
+            response: 响应文本或可调用函数
         """
         self.responses[pattern] = response
 

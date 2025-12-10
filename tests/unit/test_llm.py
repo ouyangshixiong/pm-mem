@@ -47,18 +47,18 @@ class TestMockLLM:
     def test_call_with_matching(self):
         """测试调用（模式匹配）"""
         llm = MockLLM(
-            responses={"关键词": "匹配响应"},
+            responses={"特定关键词": "匹配响应"},
             default_response="默认响应",
             enable_pattern_matching=True,
         )
 
         # 匹配关键词
-        response = llm.call("这是一个包含关键词的提示词")
+        response = llm.call("这是一个包含特定关键词的提示词")
         assert response == "匹配响应"
         assert len(llm.call_history) == 1
 
-        # 不匹配关键词
-        response = llm.call("这个提示词不包含任何关键词")
+        # 不匹配关键词（使用不同的词）
+        response = llm.call("这个提示词不包含任何匹配内容")
         assert response == "默认响应"
         assert len(llm.call_history) == 2
 

@@ -153,8 +153,8 @@ class RefineEditor:
     @staticmethod
     def _parse_add_enhanced(segment: str) -> ParseResult:
         """增强版ADD命令解析"""
-        # 支持多种格式: ADD{text}, ADD {text}, ADD{ text }
-        pattern = r"^ADD\s*\{([^}]+)\}$"
+        # 支持多种格式: ADD{text}, ADD {text}, ADD{ text }, ADD{}
+        pattern = r"^ADD\s*\{(.*)\}$"
         match = re.match(pattern, segment, re.IGNORECASE)
 
         if not match:

@@ -146,6 +146,10 @@ class TestEnhancedMemoryBank:
                 "params": {"entry": self.entry2.to_dict()}
             },
             {
+                "type": "add",
+                "params": {"entry": self.entry3.to_dict()}
+            },
+            {
                 "type": "delete",
                 "params": {"indices": [0]}
             },
@@ -162,8 +166,8 @@ class TestEnhancedMemoryBank:
         # 执行批量操作
         results = self.bank.batch_operations(operations)
 
-        assert results["total_operations"] == 5
-        assert results["successful"] == 5
+        assert results["total_operations"] == 6
+        assert results["successful"] == 6
         assert results["failed"] == 0
         assert len(results["errors"]) == 0
 

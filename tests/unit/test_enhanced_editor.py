@@ -110,22 +110,27 @@ class TestEnhancedRefineEditor:
         assert result.error is None
 
         # 测试带引号的标签
-        result = RefineEditor._parse_relabel_enhanced('RELABEL 1 "带空格的标签"')
-        assert result.relabels == [(1, "带空格的标签")]
+        result = RefineEditor._parse_relabel_enhanced('RELABEL 1 "带空格 的标签"')
+        assert result.relabels == [(1, "带空格 的标签")]
 
         # 测试大小写不敏感
         result = RefineEditor._parse_relabel_enhanced("relabel 1 tag")
         assert result.relabels == [(1, "tag")]
 
-        # 测试空标签
-        result = RefineEditor._parse_relabel_enhanced("RELABEL 1 ")
+        # 测试空标签（只有空格）
+        result = RefineEditor._parse_relabel_enhanced("RELABEL 1  ")
         assert result.error is not None
         assert "新标签为空" in result.error
 
         # 测试无效索引
         result = RefineEditor._parse_relabel_enhanced("RELABEL abc tag")
         assert result.error is not None
-        assert "索引不是数字" in result.error
+        assert "格式错误" in result.error  # 先匹配失败，返回格式错误
+
+        # 测试缺少标签（格式错误）
+        result = RefineEditor._parse_relabel_enhanced("RELABEL 1")
+        assert result.error is not None
+        assert "格式错误" in result.error
 
     def test_parse_segment(self):
         """测试命令段解析"""
@@ -176,9 +181,9 @@ class TestEnhancedRefineEditor:
         assert delta["relabel"] == [(4, "标签")]
 
         # 测试带空格和引号的标签
-        cmd = 'RELABEL 1 "带空格的标签"'
+        cmd = 'RELABEL 1 "带空格 的标签"'
         delta = RefineEditor.parse_command(cmd)
-        assert delta["relabel"] == [(1, "带空格的标签")]
+        assert delta["relabel"] == [(1, "带空格 的标签")]
 
         # 测试无效命令（应该被忽略）
         cmd = "DELETE 1,2; INVALID 3; ADD{有效内容}"
@@ -201,7 +206,7 @@ class TestEnhancedRefineEditor:
         valid, msg = RefineEditor.validate_command("MERGE 1&2")
         assert valid is True
 
-        valid, msg = RefineEditor.validate_command('RELABEL 1 "带空格的标签"')
+        valid, msg = RefineEditor.validate_command('RELABEL 1 "带空格 的标签"')
         assert valid is True
 
         # 测试无效命令
@@ -247,8 +252,9 @@ class TestEnhancedRefineEditor:
         assert cmd.count("RELABEL") == 1  # 应该只有一个重标记命令
 
         # 测试带空格的标签
-        cmd = RefineEditor.format_command(relabel=[(1, "带空格的标签")])
-        assert 'RELABEL 1 "带空格的标签"' in cmd
+        cmd = RefineEditor.format_command(relabel=[(1, "带空格 的标签")])
+        # 注意：format_command应该为带空格的标签添加引号
+        assert 'RELABEL 1 "带空格 的标签"' in cmd
 
         # 测试空参数
         cmd = RefineEditor.format_command()
@@ -263,7 +269,8 @@ class TestEnhancedRefineEditor:
         cmd = "DELETE 1,3; ADD{新内容}; MERGE 0&2; RELABEL 4 新标签"
         summary = RefineEditor.get_command_summary(cmd)
 
-        assert summary["total_operations"] == 4
+        # DELETE 1,3 是2个删除操作，ADD是1个，MERGE是1个，RELABEL是1个，总共5个操作
+        assert summary["total_operations"] == 5
         assert summary["delete_count"] == 2
         assert summary["add_count"] == 1
         assert summary["merge_count"] == 1

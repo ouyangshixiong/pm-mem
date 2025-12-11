@@ -335,115 +335,399 @@ class MemoryBank:
         # 如果k大于记忆库大小，调整为记忆库大小
         k = min(k, len(self.entries))
 
-        # PM-11: 改进的LLM提示词
+        # PM-111: 改进的LLM提示词模板
         memory_text = "\n\n".join(
             [f"[{i}]\n{e.to_text()}" for i, e in enumerate(self.entries)]
         )
 
         prompt = f"""
-你是一个专业的记忆检索器。给定用户任务：
+# 记忆检索评估任务
+
+你是一个专业的记忆检索器，需要评估记忆条目与用户查询的相关性。
+
+## 用户查询
 "{query}"
 
-以下是全部记忆条目：
-
+## 记忆条目列表（共{len(self.entries)}个）
 {memory_text}
 
-请评估每个记忆条目与查询的相关性，并按照以下JSON格式输出：
+## 任务要求
+请为每个记忆条目（索引0到{len(self.entries)-1}）评估其与查询的相关性，并按照以下JSON格式输出评估结果：
+
+```json
 {{
     "results": [
         {{
             "index": 0,
             "relevance_score": 0.85,
-            "explanation": "这个记忆与查询相关，因为..."
+            "semantic_relevance": 0.9,
+            "task_applicability": 0.8,
+            "timeliness": 0.7,
+            "explanation": "这个记忆直接回答了查询中的问题，提供了具体的解决方案，并且是最近的经验。"
+        }},
+        {{
+            "index": 1,
+            "relevance_score": 0.65,
+            "semantic_relevance": 0.7,
+            "task_applicability": 0.6,
+            "timeliness": 0.5,
+            "explanation": "记忆包含相关信息，但需要调整才能适用于当前任务，且不是最新的经验。"
         }},
         ...
     ]
 }}
+```
 
-评估标准：
-1. 语义相关性：记忆内容与查询的语义匹配程度（0.0-1.0）
-2. 任务适用性：记忆中的解决方案是否适用于当前任务（0.0-1.0）
-3. 时效性：记忆的新旧程度（越新越相关，0.0-1.0）
+## 评估维度说明（评分范围：0.0-1.0，保留两位小数）
 
-请为每个记忆条目提供：
-1. 相关性评分（0.0-1.0，保留两位小数）
-2. 简要解释为什么这个记忆相关
+### 1. 语义相关性 (semantic_relevance)
+评估记忆内容与查询的语义匹配程度：
+- **1.0**: 完全匹配，记忆直接回答了查询中的问题
+- **0.7-0.9**: 高度相关，记忆包含查询所需的核心信息
+- **0.4-0.6**: 中等相关，记忆包含部分相关信息
+- **0.1-0.3**: 低度相关，只有少量关联
+- **0.0**: 完全不相关
 
-请确保：
-1. 输出有效的JSON格式
-2. 包含所有记忆条目
-3. 评分在0.0-1.0范围内
-4. 解释简洁明了
+### 2. 任务适用性 (task_applicability)
+评估记忆中的解决方案是否适用于当前任务：
+- **1.0**: 完全适用，可以直接应用解决方案
+- **0.7-0.9**: 高度适用，需要少量调整
+- **0.4-0.6**: 中等适用，需要中等程度的调整
+- **0.1-0.3**: 低度适用，需要大量修改
+- **0.0**: 完全不适用
+
+### 3. 时效性 (timeliness)
+评估记忆的新旧程度（越新越相关）：
+- **1.0**: 非常新（最近创建，时效性高）
+- **0.7-0.9**: 较新（近期创建）
+- **0.4-0.6**: 中等新旧（有一定时间）
+- **0.1-0.3**: 较旧（创建时间较长）
+- **0.0**: 非常旧（过时的信息）
+
+### 4. 总体相关性评分 (relevance_score)
+综合以上三个维度的加权平均：
+- **权重**: 语义相关性(50%) + 任务适用性(30%) + 时效性(20%)
+- **计算公式**: 0.5*semantic_relevance + 0.3*task_applicability + 0.2*timeliness
+- **注意**: 计算结果保留两位小数
+
+## 输出规范
+
+### 必须遵守的规则
+1. **JSON格式**: 必须输出有效的JSON对象，包含"results"数组
+2. **完整性**: 必须包含所有记忆条目（索引0到{len(self.entries)-1}），一个都不能少
+3. **评分范围**: 所有评分必须在0.0-1.0范围内，保留两位小数
+4. **解释质量**: 解释应该简洁明了（1-2句话），说明为什么相关或不相关
+5. **索引对应**: 每个条目的index必须与记忆条目列表中的索引一致
+
+### 错误预防提示
+1. **不要排序**: 保持原始顺序，我们会按relevance_score排序
+2. **不要省略**: 即使完全不相关，也要包含所有条目（评分可以为0.0）
+3. **不要添加**: 输出中不要包含额外的文本、注释或说明
+4. **格式正确**: 确保JSON格式正确，没有语法错误
+5. **数值类型**: 所有评分必须是数字，不是字符串
+
+## 示例说明
+
+### 高度相关的记忆
+```json
+{{
+    "index": 0,
+    "relevance_score": 0.92,
+    "semantic_relevance": 0.95,
+    "task_applicability": 0.90,
+    "timeliness": 0.85,
+    "explanation": "记忆内容直接回答了查询问题，提供了完整的解决方案，且是最新的实践经验。"
+}}
+```
+
+### 中等相关的记忆
+```json
+{{
+    "index": 1,
+    "relevance_score": 0.63,
+    "semantic_relevance": 0.70,
+    "task_applicability": 0.60,
+    "timeliness": 0.50,
+    "explanation": "记忆包含相关信息，但需要调整才能适用于当前任务，且不是最新的经验。"
+}}
+```
+
+### 低度相关的记忆
+```json
+{{
+    "index": 2,
+    "relevance_score": 0.25,
+    "semantic_relevance": 0.30,
+    "task_applicability": 0.20,
+    "timeliness": 0.25,
+    "explanation": "记忆只有少量关联信息，不直接适用于当前任务，且信息较旧。"
+}}
+```
+
+### 完全不相关的记忆
+```json
+{{
+    "index": 3,
+    "relevance_score": 0.05,
+    "semantic_relevance": 0.10,
+    "task_applicability": 0.00,
+    "timeliness": 0.05,
+    "explanation": "记忆内容与查询主题无关，无法应用于当前任务。"
+}}
+```
+
+## 开始评估
+
+请严格按照上述要求，为每个记忆条目进行评估，并输出完整的JSON结果。
+记住：必须包含所有{len(self.entries)}个条目，保持原始顺序，不要添加额外文本。
 """
         try:
             # 调用LLM获取评估结果
             result_text = llm(prompt)
 
-            # 解析JSON响应
-            try:
-                result_data = json.loads(result_text)
-                if "results" not in result_data:
-                    raise ValueError("响应中缺少'results'字段")
-
-                # 提取评估结果
-                evaluations = []
-                for item in result_data["results"]:
-                    if "index" not in item or "relevance_score" not in item:
-                        logger.warning(f"跳过无效的评估项: {item}")
-                        continue
-
-                    idx = item["index"]
-                    score = float(item["relevance_score"])
-                    explanation = item.get("explanation", "")
-
-                    # 验证索引范围
-                    if 0 <= idx < len(self.entries):
-                        evaluations.append({
-                            "index": idx,
-                            "score": score,
-                            "explanation": explanation
-                        })
-                    else:
-                        logger.warning(f"索引超出范围: {idx}")
-
-                # 按相关性评分排序
-                evaluations.sort(key=lambda x: x["score"], reverse=True)
-
-                # 取前k个结果
-                top_k = evaluations[:k]
-
-                # 构建返回结果
-                results = []
-                for eval_item in top_k:
-                    idx = eval_item["index"]
-                    memory_entry = self.entries[idx]
-
-                    if include_explanations:
-                        # 返回RetrievalResult对象
-                        result = RetrievalResult(
-                            memory_entry=memory_entry,
-                            relevance_score=eval_item["score"],
-                            explanation=eval_item["explanation"]
-                        )
-                    else:
-                        # 返回原始MemoryEntry对象（向后兼容）
-                        result = memory_entry
-
-                    results.append(result)
-
-                logger.info(f"检索完成: 查询='{query[:50]}...', 返回{len(results)}个结果")
-                return results
-
-            except json.JSONDecodeError as e:
-                logger.error(f"LLM返回的不是有效JSON: {e}")
-                logger.debug(f"原始响应: {result_text[:200]}...")
-                # 回退到简单检索
+            # PM-113: 使用健壮的JSON解析方法
+            result_data = self._parse_json_response(result_text)
+            if result_data is None:
+                # JSON解析失败，使用回退检索
+                logger.warning("JSON解析失败，使用回退检索")
                 return self._fallback_retrieval(query, k, include_explanations)
+
+            if "results" not in result_data:
+                logger.error("响应中缺少'results'字段")
+                return self._fallback_retrieval(query, k, include_explanations)
+
+            # 提取评估结果
+            evaluations = []
+            for item in result_data["results"]:
+                if "index" not in item or "relevance_score" not in item:
+                    logger.warning(f"跳过无效的评估项: {item}")
+                    continue
+
+                idx = item["index"]
+
+                # PM-112: 多维度评分解析和验证
+                try:
+                    score = self._validate_and_parse_score(item, "relevance_score")
+                    semantic_relevance = self._validate_and_parse_score(item, "semantic_relevance", 0.0)
+                    task_applicability = self._validate_and_parse_score(item, "task_applicability", 0.0)
+                    timeliness = self._validate_and_parse_score(item, "timeliness", 0.0)
+                except ValueError as e:
+                    logger.warning(f"评分验证失败: {e}")
+                    continue
+
+                explanation = item.get("explanation", "")
+
+                # 验证索引范围
+                if 0 <= idx < len(self.entries):
+                    evaluations.append({
+                        "index": idx,
+                        "score": score,
+                        "semantic_relevance": semantic_relevance,
+                        "task_applicability": task_applicability,
+                        "timeliness": timeliness,
+                        "explanation": explanation
+                    })
+                else:
+                    logger.warning(f"索引超出范围: {idx}")
+
+            # PM-121: 按相关性评分排序
+            evaluations.sort(key=lambda x: x["score"], reverse=True)
+
+            # PM-121: 取前k个结果
+            top_k = evaluations[:k]
+
+            # 构建返回结果
+            results = []
+            for eval_item in top_k:
+                idx = eval_item["index"]
+                memory_entry = self.entries[idx]
+
+                if include_explanations:
+                    # 返回RetrievalResult对象
+                    result = RetrievalResult(
+                        memory_entry=memory_entry,
+                        relevance_score=eval_item["score"],
+                        explanation=eval_item["explanation"]
+                    )
+                else:
+                    # 返回原始MemoryEntry对象（向后兼容）
+                    result = memory_entry
+
+                results.append(result)
+
+            logger.info(f"检索完成: 查询='{query[:50]}...', 返回{len(results)}个结果")
+            return results
 
         except Exception as e:
             logger.error(f"LLM检索失败: {e}")
             # 回退到简单检索
             return self._fallback_retrieval(query, k, include_explanations)
+
+    def _parse_json_response(self, result_text: str) -> Optional[Dict[str, Any]]:
+        """
+        PM-113: 健壮的JSON解析方法
+
+        Args:
+            result_text: LLM返回的文本
+
+        Returns:
+            解析后的JSON数据，如果解析失败返回None
+        """
+        if not result_text or not isinstance(result_text, str):
+            logger.error("结果文本为空或不是字符串")
+            return None
+
+        # 尝试直接解析JSON
+        try:
+            result_data = json.loads(result_text)
+            logger.debug("JSON解析成功")
+            return result_data
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON解析失败: {e}")
+
+        # PM-113: 尝试提取JSON部分（处理LLM可能添加的额外文本）
+        try:
+            # 尝试查找JSON对象开始和结束位置
+            start_idx = result_text.find('{')
+            end_idx = result_text.rfind('}')
+
+            if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                json_str = result_text[start_idx:end_idx + 1]
+                result_data = json.loads(json_str)
+                logger.debug("从文本中提取JSON成功")
+                return result_data
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"提取JSON失败: {e}")
+
+        # PM-113: 尝试处理常见的JSON格式问题
+        try:
+            # 处理可能的单引号问题
+            normalized_text = result_text.replace("'", '"')
+            # 处理可能的尾部逗号
+            normalized_text = normalized_text.replace(',\n}', '\n}').replace(',\n]', '\n]')
+            result_data = json.loads(normalized_text)
+            logger.debug("规范化后JSON解析成功")
+            return result_data
+        except json.JSONDecodeError as e:
+            logger.warning(f"规范化JSON解析失败: {e}")
+
+        # 记录原始响应（前200个字符）用于调试
+        logger.error(f"无法解析JSON响应，原始响应前200字符: {result_text[:200]}...")
+        return None
+
+    def _validate_and_parse_score(self, item: Dict[str, Any], score_key: str, default: float = 0.5) -> float:
+        """
+        PM-112: 增强的多维度评分验证和解析方法
+
+        Args:
+            item: 评分项字典，包含各个维度的评分
+            score_key: 评分键名（如'relevance_score', 'semantic_relevance'等）
+            default: 默认评分值（当评分无效时使用），根据评分类型设置合理的默认值
+
+        Returns:
+            验证后的评分值（0.0-1.0），保留两位小数
+
+        Raises:
+            ValueError: 如果评分无效且无法恢复
+        """
+        # 参数验证
+        if not isinstance(item, dict):
+            logger.error(f"评分项必须是字典，实际类型: {type(item)}")
+            raise ValueError(f"评分项必须是字典，实际类型: {type(item)}")
+
+        if not isinstance(score_key, str) or not score_key.strip():
+            logger.error(f"评分键名必须是非空字符串，实际值: {score_key}")
+            raise ValueError(f"评分键名必须是非空字符串，实际值: {score_key}")
+
+        if not isinstance(default, (int, float)) or not (0.0 <= default <= 1.0):
+            logger.warning(f"默认值必须在0.0-1.0范围内，实际值: {default}，使用0.5")
+            default = 0.5
+
+        # 检查评分字段是否存在
+        if score_key not in item:
+            logger.warning(f"评分项中缺少'{score_key}'字段，使用默认值{default}")
+            return round(default, 2)
+
+        score_value = item[score_key]
+
+        # 类型检查和处理
+        if score_value is None:
+            logger.warning(f"'{score_key}'字段值为None，使用默认值{default}")
+            return round(default, 2)
+
+        # 尝试转换为浮点数
+        try:
+            if isinstance(score_value, str):
+                # 处理字符串类型的评分
+                score_str = score_value.strip()
+                if not score_str:
+                    logger.warning(f"'{score_key}'字段为空字符串，使用默认值{default}")
+                    return round(default, 2)
+
+                # 尝试解析字符串
+                score = float(score_str)
+            elif isinstance(score_value, (int, float)):
+                score = float(score_value)
+            else:
+                logger.warning(f"'{score_key}'字段类型不支持: {type(score_value)}，使用默认值{default}")
+                return round(default, 2)
+
+        except (ValueError, TypeError) as e:
+            logger.warning(f"无法将'{score_key}'转换为数字: {score_value}，错误: {e}，使用默认值{default}")
+            return round(default, 2)
+
+        # 严格的范围验证
+        if not (0.0 <= score <= 1.0):
+            # 记录详细的错误信息
+            logger.warning(
+                f"'{score_key}'评分超出有效范围[0.0, 1.0]: {score}，"
+                f"调整为默认值{default}"
+            )
+
+            # 对于轻微超出范围的情况，可以尝试修正
+            if score < 0.0:
+                logger.debug(f"负分修正为0.0: {score}")
+                score = 0.0
+            elif score > 1.0:
+                logger.debug(f"超过1.0的分数修正为1.0: {score}")
+                score = 1.0
+            else:
+                # 其他情况使用默认值
+                return round(default, 2)
+
+        # 精度处理：保留两位小数，确保在有效范围内
+        score = round(score, 2)
+
+        # 最终范围检查（处理四舍五入后可能超出范围的情况）
+        if score < 0.0:
+            score = 0.0
+        elif score > 1.0:
+            score = 1.0
+
+        # 验证特定评分类型的合理性
+        if score_key == "relevance_score":
+            # 总体相关性评分应该与其他维度评分一致
+            if "semantic_relevance" in item and "task_applicability" in item and "timeliness" in item:
+                try:
+                    semantic = float(item.get("semantic_relevance", 0.0))
+                    task = float(item.get("task_applicability", 0.0))
+                    time = float(item.get("timeliness", 0.0))
+
+                    # 计算期望的加权评分
+                    expected_score = 0.5 * semantic + 0.3 * task + 0.2 * time
+                    expected_score = round(expected_score, 2)
+
+                    # 如果实际评分与期望评分差异过大，记录警告
+                    if abs(score - expected_score) > 0.2:  # 允许20%的差异
+                        logger.debug(
+                            f"'{score_key}'评分({score})与计算值({expected_score})差异较大。"
+                            f"语义相关性: {semantic}, 任务适用性: {task}, 时效性: {time}"
+                        )
+                except (ValueError, TypeError):
+                    pass  # 忽略计算错误
+
+        logger.debug(f"成功解析'{score_key}'评分: {score}")
+        return score
 
     def _fallback_retrieval(
         self, query: str, k: int, include_explanations: bool

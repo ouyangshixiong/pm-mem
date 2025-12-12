@@ -42,9 +42,22 @@ class MemoryBank:
         if not isinstance(entry, MemoryEntry):
             raise ValueError(f"entry必须是MemoryEntry实例，实际类型: {type(entry)}")
 
+        # 如果已达到最大容量，删除最旧的条目以腾出空间
         if len(self.entries) >= self.max_entries:
-            logger.warning(f"记忆库已达最大容量 {self.max_entries}，将执行清理")
-            self._prune()
+            logger.warning(f"记忆库已达最大容量 {self.max_entries}，将删除最旧的条目")
+            # 按时间排序，删除最旧的
+            self.entries.sort(key=lambda e: e.timestamp)
+            deleted_entry = self.entries.pop(0)
+            # 记录删除操作
+            self._record_operation(
+                operation_type="prune",
+                details={
+                    "deleted_entry_id": deleted_entry.id,
+                    "reason": "capacity_full"
+                },
+                success=True
+            )
+            logger.debug(f"删除最旧的记忆条目: {deleted_entry.id}")
 
         self.entries.append(entry)
 
@@ -835,6 +848,15 @@ class MemoryBank:
             "operation_history_count": len(self.operation_history),
         }
 
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        获取记忆库统计信息（get_statistics的别名）
+
+        Returns:
+            包含统计信息的字典
+        """
+        return self.get_statistics()
+
     def to_dict(self) -> List[Dict[str, Any]]:
         """
         转换为字典列表，用于序列化
@@ -865,6 +887,163 @@ class MemoryBank:
                 logger.warning(f"加载记忆条目失败: {e}")
         return bank
 
+    # ====== 新增方法：基础管理功能 ======
+
+    def add_entry(self, entry: MemoryEntry) -> None:
+        """
+        添加记忆条目（add方法的别名，保持API一致性）
+
+        Args:
+            entry: 要添加的记忆条目
+        """
+        self.add(entry)
+
+    def get_entry(self, entry_id: str) -> Optional[MemoryEntry]:
+        """
+        根据ID获取记忆条目
+
+        Args:
+            entry_id: 记忆条目ID
+
+        Returns:
+            找到的记忆条目，如果不存在返回None
+        """
+        for entry in self.entries:
+            if entry.id == entry_id:
+                return entry
+        return None
+
+    def delete_entry(self, entry_id: str) -> bool:
+        """
+        根据ID删除记忆条目
+
+        Args:
+            entry_id: 要删除的记忆条目ID
+
+        Returns:
+            是否成功删除
+        """
+        for i, entry in enumerate(self.entries):
+            if entry.id == entry_id:
+                self.delete([i])
+                return True
+        return False
+
+    def update_entry(self, entry_id: str, **kwargs) -> bool:
+        """
+        更新记忆条目
+
+        Args:
+            entry_id: 要更新的记忆条目ID
+            **kwargs: 要更新的字段和值
+
+        Returns:
+            是否成功更新
+        """
+        for entry in self.entries:
+            if entry.id == entry_id:
+                try:
+                    # 更新允许的字段
+                    allowed_fields = {"x", "y", "feedback", "tag", "timestamp"}
+                    for field, value in kwargs.items():
+                        if field in allowed_fields:
+                            setattr(entry, field, value)
+
+                    # 记录操作历史
+                    self._record_operation(
+                        operation_type="update",
+                        details={
+                            "entry_id": entry_id,
+                            "updated_fields": list(kwargs.keys())
+                        },
+                        success=True
+                    )
+
+                    logger.debug(f"更新记忆条目: {entry_id}")
+                    return True
+                except Exception as e:
+                    logger.error(f"更新记忆条目失败: {e}")
+                    return False
+        return False
+
+    # ====== 新增方法：检索接口和统计功能 ======
+
+    def search(self, query: str, limit: int = 10) -> List[MemoryEntry]:
+        """
+        简单文本搜索（基于关键词匹配）
+
+        Args:
+            query: 搜索查询
+            limit: 返回的最大结果数
+
+        Returns:
+            匹配的记忆条目列表
+        """
+        if not query or not query.strip():
+            return []
+
+        query_lower = query.lower()
+        results = []
+
+        for entry in self.entries:
+            # 检查x、y、feedback、tag字段是否包含查询词
+            if (query_lower in entry.x.lower() or
+                query_lower in entry.y.lower() or
+                query_lower in entry.feedback.lower() or
+                query_lower in entry.tag.lower()):
+                results.append(entry)
+
+            if len(results) >= limit:
+                break
+
+        return results
+
+    def filter_by_tag(self, tag: str) -> List[MemoryEntry]:
+        """
+        根据标签过滤记忆条目
+
+        Args:
+            tag: 标签名称
+
+        Returns:
+            具有指定标签的记忆条目列表
+        """
+        if not tag:
+            return []
+
+        return [entry for entry in self.entries if entry.tag == tag]
+
+    def get_recent_entries(self, limit: int = 10) -> List[MemoryEntry]:
+        """
+        获取最近的记忆条目
+
+        Args:
+            limit: 返回的最大条目数
+
+        Returns:
+            最近的记忆条目列表（按时间戳降序）
+        """
+        sorted_entries = sorted(self.entries, key=lambda e: e.timestamp, reverse=True)
+        return sorted_entries[:limit]
+
+    def clear(self) -> None:
+        """
+        清空记忆库
+        """
+        original_count = len(self.entries)
+        self.entries.clear()
+
+        # 记录操作历史
+        self._record_operation(
+            operation_type="clear",
+            details={
+                "cleared_count": original_count
+            },
+            success=True
+        )
+
+        logger.info(f"清空记忆库，删除了 {original_count} 条记忆")
+
     def __len__(self) -> int:
         """返回记忆条目数量"""
         return len(self.entries)
@@ -872,3 +1051,7 @@ class MemoryBank:
     def __getitem__(self, idx: int) -> MemoryEntry:
         """通过索引获取记忆条目"""
         return self.entries[idx]
+
+    def __repr__(self) -> str:
+        """字符串表示"""
+        return f"MemoryBank(entries={len(self.entries)}, max_entries={self.max_entries})"

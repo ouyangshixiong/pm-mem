@@ -6,20 +6,11 @@
 
 import uuid
 from datetime import datetime
-from dataclasses import dataclass, asdict
 from typing import Dict, Any, Optional
 
 
-@dataclass
 class MemoryEntry:
     """记忆条目类，表示单个记忆单元"""
-
-    id: str
-    x: str  # 任务输入/触发情境
-    y: str  # 智能体输出/存储知识
-    feedback: str  # 环境反馈
-    timestamp: datetime  # 时间戳（UTC格式）
-    tag: str  # 记忆标签
 
     def __init__(
         self,
@@ -47,6 +38,81 @@ class MemoryEntry:
         self.feedback = feedback
         self.tag = tag
         self.timestamp = timestamp or datetime.utcnow()
+
+    # Property getter/setter methods
+    @property
+    def id(self) -> str:
+        """获取记忆条目ID"""
+        return self._id
+
+    @id.setter
+    def id(self, value: str) -> None:
+        """设置记忆条目ID"""
+        if not isinstance(value, str):
+            raise TypeError(f"id必须是字符串，实际类型: {type(value)}")
+        if not value.strip():
+            raise ValueError("id不能为空")
+        self._id = value
+
+    @property
+    def x(self) -> str:
+        """获取任务输入/触发情境"""
+        return self._x
+
+    @x.setter
+    def x(self, value: str) -> None:
+        """设置任务输入/触发情境"""
+        if not isinstance(value, str):
+            raise TypeError(f"x必须是字符串，实际类型: {type(value)}")
+        self._x = value
+
+    @property
+    def y(self) -> str:
+        """获取智能体输出/存储知识"""
+        return self._y
+
+    @y.setter
+    def y(self, value: str) -> None:
+        """设置智能体输出/存储知识"""
+        if not isinstance(value, str):
+            raise TypeError(f"y必须是字符串，实际类型: {type(value)}")
+        self._y = value
+
+    @property
+    def feedback(self) -> str:
+        """获取环境反馈"""
+        return self._feedback
+
+    @feedback.setter
+    def feedback(self, value: str) -> None:
+        """设置环境反馈"""
+        if not isinstance(value, str):
+            raise TypeError(f"feedback必须是字符串，实际类型: {type(value)}")
+        self._feedback = value
+
+    @property
+    def tag(self) -> str:
+        """获取记忆标签"""
+        return self._tag
+
+    @tag.setter
+    def tag(self, value: str) -> None:
+        """设置记忆标签"""
+        if not isinstance(value, str):
+            raise TypeError(f"tag必须是字符串，实际类型: {type(value)}")
+        self._tag = value
+
+    @property
+    def timestamp(self) -> datetime:
+        """获取时间戳"""
+        return self._timestamp
+
+    @timestamp.setter
+    def timestamp(self, value: datetime) -> None:
+        """设置时间戳"""
+        if not isinstance(value, datetime):
+            raise TypeError(f"timestamp必须是datetime对象，实际类型: {type(value)}")
+        self._timestamp = value
 
     def to_text(self) -> str:
         """
@@ -109,3 +175,7 @@ class MemoryEntry:
     def __hash__(self) -> int:
         """哈希函数（基于id）"""
         return hash(self.id)
+
+    def __repr__(self) -> str:
+        """字符串表示"""
+        return f"MemoryEntry(id={self.id}, x={self.x[:20]}..., tag={self.tag})"

@@ -118,13 +118,6 @@ class APIKeyManager:
                 decrypted.append(byte ^ key_byte)
 
             result = decrypted.decode()
-
-            # 验证解密结果是否为有效的JSON格式
-            try:
-                json.loads(result)
-            except json.JSONDecodeError:
-                raise ValueError("解密结果不是有效的JSON格式，可能是错误的加密密钥")
-
             return result
 
         except ValueError as e:
@@ -306,7 +299,7 @@ class APIKeyManager:
 
         # 确定是否检查状态
         if check_status is None:
-            check_status = update_usage  # 默认：更新使用时检查状态，不更新使用时返回所有状态
+            check_status = True  # 默认总是检查状态
 
         # 检查密钥状态（如果要求检查）
         if check_status and key_info.status != KeyStatus.ACTIVE:

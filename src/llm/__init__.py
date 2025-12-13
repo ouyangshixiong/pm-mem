@@ -5,10 +5,16 @@ LLM模块
 """
 
 from .llm_interface import LLMInterface, LLMClientBase
-from .deepseek_client import DeepSeekClient
+try:
+    from .deepseek_client import DeepSeekClient
+except Exception:
+    DeepSeekClient = None
 from .mock_llm import MockLLM, DeterministicMockLLM, MockLLMAdapter
 from .llm_interface_enhanced import EnhancedLLMInterface, EnhancedLLMClientBase, LLMResponse, LLMCallMode
-from .deepseek_client_enhanced import EnhancedDeepSeekClient
+try:
+    from .deepseek_client_enhanced import EnhancedDeepSeekClient
+except Exception:
+    EnhancedDeepSeekClient = None
 
 __all__ = [
     # 基础接口

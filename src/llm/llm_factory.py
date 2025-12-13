@@ -11,8 +11,6 @@ from enum import Enum
 
 from .llm_interface import LLMInterface
 from .llm_interface_enhanced import EnhancedLLMInterface
-from .deepseek_client import DeepSeekClient
-from .deepseek_client_enhanced import EnhancedDeepSeekClient
 from .mock_llm import MockLLM, MockLLMAdapter, DeterministicMockLLM
 from config.config_manager import get_config_manager
 from config.api_key_manager import get_api_key_manager, get_api_key
@@ -169,6 +167,10 @@ class LLMFactory:
 
     def _create_deepseek_llm(self, environment: str, kwargs: Dict[str, Any]) -> LLMInterface:
         """创建DeepSeek LLM实例"""
+        try:
+            from .deepseek_client_enhanced import EnhancedDeepSeekClient  # 延迟导入以避免测试环境依赖
+        except Exception as e:
+            raise RuntimeError(f"DeepSeek客户端不可用: {e}")
         # 获取API密钥
         api_key = self._get_api_key("deepseek", environment)
 

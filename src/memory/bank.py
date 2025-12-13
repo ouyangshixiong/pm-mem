@@ -365,31 +365,8 @@ class MemoryBank:
 {memory_text}
 
 ## 任务要求
-请为每个记忆条目（索引0到{len(self.entries)-1}）评估其与查询的相关性，并按照以下JSON格式输出评估结果：
-
-```json
-{{
-    "results": [
-        {{
-            "index": 0,
-            "relevance_score": 0.85,
-            "semantic_relevance": 0.9,
-            "task_applicability": 0.8,
-            "timeliness": 0.7,
-            "explanation": "这个记忆直接回答了查询中的问题，提供了具体的解决方案，并且是最近的经验。"
-        }},
-        {{
-            "index": 1,
-            "relevance_score": 0.65,
-            "semantic_relevance": 0.7,
-            "task_applicability": 0.6,
-            "timeliness": 0.5,
-            "explanation": "记忆包含相关信息，但需要调整才能适用于当前任务，且不是最新的经验。"
-        }},
-        ...
-    ]
-}}
-```
+请为每个记忆条目（索引0到{len(self.entries)-1}）评估其与查询的相关性，并严格输出有效的JSON对象（不要使用代码块标记，不要添加额外文字）。输出格式为一个对象，包含字段：
+- "results": 数组，其中每个元素包含 "index"、"relevance_score"、"semantic_relevance"、"task_applicability"、"timeliness"、"explanation"
 
 ## 评估维度说明（评分范围：0.0-1.0，保留两位小数）
 
@@ -427,7 +404,7 @@ class MemoryBank:
 
 ### 必须遵守的规则
 1. **JSON格式**: 必须输出有效的JSON对象，包含"results"数组
-2. **完整性**: 必须包含所有记忆条目（索引0到{len(self.entries)-1}），一个都不能少
+2. **只输出前{k}个**: 仅返回与查询最相关的前{k}个条目，按relevance_score降序
 3. **评分范围**: 所有评分必须在0.0-1.0范围内，保留两位小数
 4. **解释质量**: 解释应该简洁明了（1-2句话），说明为什么相关或不相关
 5. **索引对应**: 每个条目的index必须与记忆条目列表中的索引一致
@@ -441,61 +418,45 @@ class MemoryBank:
 
 ## 示例说明
 
-### 高度相关的记忆
-```json
-{{
-    "index": 0,
-    "relevance_score": 0.92,
-    "semantic_relevance": 0.95,
-    "task_applicability": 0.90,
-    "timeliness": 0.85,
-    "explanation": "记忆内容直接回答了查询问题，提供了完整的解决方案，且是最新的实践经验。"
-}}
-```
+### 高度相关的记忆（示例项说明）
+包含较高的 "semantic_relevance" 与 "task_applicability"，并且 "timeliness" 较高
 
-### 中等相关的记忆
-```json
-{{
-    "index": 1,
-    "relevance_score": 0.63,
-    "semantic_relevance": 0.70,
-    "task_applicability": 0.60,
-    "timeliness": 0.50,
-    "explanation": "记忆包含相关信息，但需要调整才能适用于当前任务，且不是最新的经验。"
-}}
-```
+### 中等相关的记忆（示例项说明）
+相关信息部分匹配，需要适当调整，时效性一般
 
-### 低度相关的记忆
-```json
-{{
-    "index": 2,
-    "relevance_score": 0.25,
-    "semantic_relevance": 0.30,
-    "task_applicability": 0.20,
-    "timeliness": 0.25,
-    "explanation": "记忆只有少量关联信息，不直接适用于当前任务，且信息较旧。"
-}}
-```
+### 低度相关的记忆（示例项说明）
+仅少量关联信息，难以直接应用，可能较旧
 
-### 完全不相关的记忆
-```json
-{{
-    "index": 3,
-    "relevance_score": 0.05,
-    "semantic_relevance": 0.10,
-    "task_applicability": 0.00,
-    "timeliness": 0.05,
-    "explanation": "记忆内容与查询主题无关，无法应用于当前任务。"
-}}
-```
+### 完全不相关的记忆（示例项说明）
+与查询主题不相关，无法应用
 
 ## 开始评估
 
-请严格按照上述要求，为每个记忆条目进行评估，并输出完整的JSON结果。
-记住：必须包含所有{len(self.entries)}个条目，保持原始顺序，不要添加额外文本。
+请严格按照上述要求，为记忆条目进行评估，并输出完整的JSON结果。
+记住：只需返回前{k}个条目，不要添加额外文本。
 """
         try:
             # 调用LLM获取评估结果
+            # 根据模型上下文长度动态裁剪提示
+            model_info = {}
+            try:
+                model_info = llm.get_model_info()
+            except Exception:
+                model_info = {}
+            context_len = int(model_info.get("context_length_tokens", 64000))
+            # 估算字符预算（混合文本约0.5 token/char）
+            char_budget = int((context_len - 2048) / 0.5)
+            if len(prompt) > char_budget:
+                # 尽量裁剪记忆部分，以保留任务与规则
+                head_split = prompt.split("## 记忆条目列表", 1)
+                if len(head_split) == 2:
+                    head = head_split[0]
+                    body = "## 记忆条目列表" + head_split[1]
+                    keep_head = min(len(head), int(char_budget * 0.4))
+                    keep_body = max(0, char_budget - keep_head)
+                    prompt = head[:keep_head] + "\n...\n" + body[:keep_body]
+                else:
+                    prompt = prompt[:char_budget]
             result_text = llm(prompt)
 
             # PM-113: 使用健壮的JSON解析方法
@@ -590,6 +551,20 @@ class MemoryBank:
             logger.error("结果文本为空或不是字符串")
             return None
 
+        # 如果存在代码块（```json ... ```），优先提取其中内容
+        try:
+            if "```json" in result_text:
+                start = result_text.find("```json")
+                end = result_text.find("```", start + 7)
+                if end != -1:
+                    fenced = result_text[start + 7:end].strip()
+                    cleaned = fenced.replace("…", "").replace("...", "")
+                    result_data = json.loads(cleaned)
+                    logger.debug("从JSON代码块解析成功")
+                    return result_data
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"JSON代码块解析失败: {e}")
+
         # 尝试直接解析JSON
         try:
             result_data = json.loads(result_text)
@@ -606,6 +581,7 @@ class MemoryBank:
 
             if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                 json_str = result_text[start_idx:end_idx + 1]
+                json_str = json_str.replace("```", "").replace("…", "").replace("...", "")
                 result_data = json.loads(json_str)
                 logger.debug("从文本中提取JSON成功")
                 return result_data
@@ -618,14 +594,54 @@ class MemoryBank:
             normalized_text = result_text.replace("'", '"')
             # 处理可能的尾部逗号
             normalized_text = normalized_text.replace(',\n}', '\n}').replace(',\n]', '\n]')
+            # 去除代码块标记和省略号
+            normalized_text = normalized_text.replace("```json", "").replace("```", "")
+            normalized_text = normalized_text.replace("…", "").replace("...", "")
             result_data = json.loads(normalized_text)
             logger.debug("规范化后JSON解析成功")
             return result_data
         except json.JSONDecodeError as e:
             logger.warning(f"规范化JSON解析失败: {e}")
 
-        # 记录原始响应（前200个字符）用于调试
-        logger.error(f"无法解析JSON响应，原始响应前200字符: {result_text[:200]}...")
+        # 尝试提取 "results" 数组并重构JSON
+        try:
+            key_idx = result_text.find('"results"')
+            if key_idx != -1:
+                # 找到数组起始 '['
+                arr_start = result_text.find('[', key_idx)
+                if arr_start != -1:
+                    # 计数匹配 '[]' 边界，忽略对象内的大括号
+                    depth = 0
+                    i = arr_start
+                    while i < len(result_text):
+                        ch = result_text[i]
+                        if ch == '[':
+                            depth += 1
+                        elif ch == ']':
+                            depth -= 1
+                            if depth == 0:
+                                arr_end = i
+                                break
+                        i += 1
+                    else:
+                        arr_end = -1
+
+                    if arr_end != -1:
+                        array_str = result_text[arr_start:arr_end + 1]
+                        # 清理常见噪音
+                        array_str = array_str.replace("```json", "").replace("```", "")
+                        array_str = array_str.replace("…", "").replace("...", "")
+                        array_str = array_str.replace(",]", "]")
+                        # 重构为标准JSON对象
+                        reconstructed = f'{{"results": {array_str}}}'
+                        result_data = json.loads(reconstructed)
+                        # logger.debug("通过提取results数组重构JSON成功")
+                        return result_data
+        except Exception as e:
+            logger.warning(f"提取results数组重构JSON失败: {e}")
+
+        # 记录原始响应（前500个字符）用于调试
+        # logger.error(f"无法解析JSON响应，原始响应前500字符: {result_text[:500]}...")
         return None
 
     def _validate_and_parse_score(self, item: Dict[str, Any], score_key: str, default: float = 0.5) -> float:
@@ -732,14 +748,14 @@ class MemoryBank:
 
                     # 如果实际评分与期望评分差异过大，记录警告
                     if abs(score - expected_score) > 0.2:  # 允许20%的差异
-                        logger.debug(
-                            f"'{score_key}'评分({score})与计算值({expected_score})差异较大。"
-                            f"语义相关性: {semantic}, 任务适用性: {task}, 时效性: {time}"
-                        )
+                        pass
+                        # logger.debug(
+                        #     f"'{score_key}'评分({score})与计算值({expected_score})差异较大。"
+                        #     f"语义相关性: {semantic}, 任务适用性: {task}, 时效性: {time}"
+                        # )
                 except (ValueError, TypeError):
                     pass  # 忽略计算错误
-
-        logger.debug(f"成功解析'{score_key}'评分: {score}")
+        # logger.debug(f"成功解析'{score_key}'评分: {score}")
         return score
 
     def _fallback_retrieval(

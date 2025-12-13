@@ -6,6 +6,7 @@ DeepSeek API客户端
 
 import os
 import time
+import random
 from typing import Optional, Dict, Any
 import logging
 
@@ -18,6 +19,7 @@ except ImportError:
     )
 
 from .llm_interface import LLMClientBase
+from .deepseek_models import get_model_context_length
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ class DeepSeekClient(LLMClientBase):
         model_name: str = "deepseek-chat",
         max_tokens: int = 2048,
         temperature: float = 0.7,
-        timeout: int = 30,
+        timeout: int = 60,
         max_retries: int = 3,
     ):
         """
@@ -68,8 +70,10 @@ class DeepSeekClient(LLMClientBase):
             base_url=self.api_base,
             timeout=self.timeout,
         )
+        # 记录模型上下文长度
+        self.context_length_tokens = get_model_context_length(model_name)
 
-        logger.info(f"DeepSeek客户端已初始化 - 模型: {model_name}, API基础URL: {self.api_base}")
+        # logger.info(f"DeepSeek客户端已初始化 - 模型: {model_name}, API基础URL: {self.api_base}")
 
     def call(self, prompt: str, **kwargs) -> str:
         """
@@ -94,6 +98,17 @@ class DeepSeekClient(LLMClientBase):
         temperature = kwargs.get("temperature", self.temperature)
         max_retries = kwargs.get("max_retries", self.max_retries)
 
+        # 估算输入token并裁剪，避免超过上下文窗口
+        input_tokens = self._estimate_tokens(prompt)
+        # 为输出预留安全空间（chat预留~1024，reasoner预留~2048）
+        safety_generation = 2048 if "reasoner" in model_name else 1024
+        # 根据上下文调整max_tokens与输入
+        budget = max(self.context_length_tokens - input_tokens - safety_generation, 256)
+        if max_tokens > budget:
+            max_tokens = int(budget)
+        if input_tokens + max_tokens + safety_generation > self.context_length_tokens:
+            prompt = self._truncate_to_budget(prompt, self.context_length_tokens - max_tokens - safety_generation)
+
         last_error = None
         for attempt in range(max_retries):
             try:
@@ -108,6 +123,7 @@ class DeepSeekClient(LLMClientBase):
                 )
 
                 result = response.choices[0].message.content.strip()
+                # logger.warning(f"DeepSeek原始响应: {result}")
                 self._log_call(prompt, result)
                 return result
 
@@ -121,10 +137,11 @@ class DeepSeekClient(LLMClientBase):
 
             except APITimeoutError as e:
                 last_error = e
+                wait_time = min(2 ** attempt, 8) + random.uniform(0, 0.5)
                 logger.warning(
-                    f"API请求超时，第{attempt + 1}次重试: {e}"
+                    f"API请求超时，第{attempt + 1}次重试，等待{wait_time:.1f}秒: {e}"
                 )
-                time.sleep(1)  # 短时间等待后重试
+                time.sleep(wait_time)
 
             except APIError as e:
                 last_error = e
@@ -151,6 +168,7 @@ class DeepSeekClient(LLMClientBase):
             "provider": "DeepSeek",
             "api_base": self.api_base,
             "supports_streaming": True,
+            "context_length_tokens": self.context_length_tokens,
         })
         return info
 
@@ -167,10 +185,33 @@ class DeepSeekClient(LLMClientBase):
         """
         api_key = os.getenv("DEEPSEEK_API_KEY")
         api_base = os.getenv("DEEPSEEK_API_BASE")
+        model_env = os.getenv("DEEPSEEK_MODEL")
 
         if not api_key:
             raise ValueError(
                 "环境变量DEEPSEEK_API_KEY未设置。请在.env文件中设置或导出环境变量"
             )
 
+        if model_env and "model_name" not in kwargs:
+            kwargs["model_name"] = model_env
         return cls(api_key=api_key, api_base=api_base, **kwargs)
+
+    def _estimate_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        # 简单估算：中文字符约0.6 token，英文约0.3 token，混合取0.5
+        non_ascii = sum(1 for c in text if ord(c) > 127)
+        ratio = 0.6 if non_ascii > (len(text) // 10) else 0.3
+        return int(len(text) * ratio)
+
+    def _truncate_to_budget(self, text: str, target_tokens: int) -> str:
+        if target_tokens <= 0:
+            return text[:1024]
+        # 基于估算回推字符预算
+        char_budget = int(target_tokens / 0.5)
+        if len(text) <= char_budget:
+            return text
+        # 保留开头说明与结尾指令，截断中间
+        head = text[: int(char_budget * 0.4)]
+        tail = text[- int(char_budget * 0.4):]
+        return head + "\n...\n" + tail

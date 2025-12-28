@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 class LLMProvider(Enum):
     """LLM提供商枚举"""
     DEEPSEEK = "deepseek"
+    KIMI = "kimi"
+    MIMO = "mimo"
     MOCK = "mock"
     DETERMINISTIC_MOCK = "deterministic_mock"
 
@@ -149,6 +151,10 @@ class LLMFactory:
         try:
             if provider == LLMProvider.DEEPSEEK.value:
                 return self._create_deepseek_llm(environment, merged_kwargs)
+            elif provider == LLMProvider.KIMI.value:
+                return self._create_kimi_llm(environment, merged_kwargs)
+            elif provider == LLMProvider.MIMO.value:
+                return self._create_mimo_llm(environment, merged_kwargs)
             elif provider == LLMProvider.MOCK.value:
                 return self._create_mock_llm(environment, merged_kwargs)
             elif provider == LLMProvider.DETERMINISTIC_MOCK.value:
@@ -194,6 +200,66 @@ class LLMFactory:
 
         logger.info(f"创建DeepSeek LLM实例 - 环境: {environment}, 模型: {llm_kwargs['model_name']}")
         return EnhancedDeepSeekClient(**llm_kwargs)
+
+    def _create_kimi_llm(self, environment: str, kwargs: Dict[str, Any]) -> LLMInterface:
+        """创建Kimi LLM实例"""
+        try:
+            from .kimi_client_enhanced import EnhancedKimiClient  # 延迟导入以避免测试环境依赖
+        except Exception as e:
+            raise RuntimeError(f"Kimi客户端不可用: {e}")
+        # 获取API密钥
+        api_key = self._get_api_key("kimi", environment)
+
+        if not api_key:
+            raise ValueError(f"未找到Kimi在{environment}环境的API密钥")
+
+        # 创建增强的Kimi客户端
+        llm_kwargs = {
+            "api_key": api_key,
+            "model_name": kwargs.get("model_name", "kimi-k2-0905-preview"),
+            "max_tokens": kwargs.get("max_tokens", 2048),
+            "temperature": kwargs.get("temperature", 0.7),
+            "timeout": kwargs.get("timeout", 30),
+            "max_retries": kwargs.get("max_retries", 3),
+            "connection_pool_size": kwargs.get("connection_pool_size", 5),
+        }
+
+        # 可选参数
+        if "api_base" in kwargs:
+            llm_kwargs["api_base"] = kwargs["api_base"]
+
+        logger.info(f"创建Kimi LLM实例 - 环境: {environment}, 模型: {llm_kwargs['model_name']}")
+        return EnhancedKimiClient(**llm_kwargs)
+
+    def _create_mimo_llm(self, environment: str, kwargs: Dict[str, Any]) -> LLMInterface:
+        """创建Mimo LLM实例"""
+        try:
+            from .mimo_client_enhanced import EnhancedMimoClient  # 延迟导入以避免测试环境依赖
+        except Exception as e:
+            raise RuntimeError(f"Mimo客户端不可用: {e}")
+        # 获取API密钥
+        api_key = self._get_api_key("mimo", environment)
+
+        if not api_key:
+            raise ValueError(f"未找到Mimo在{environment}环境的API密钥")
+
+        # 创建增强的Mimo客户端
+        llm_kwargs = {
+            "api_key": api_key,
+            "model_name": kwargs.get("model_name", "mimo-v2-flash"),
+            "max_tokens": kwargs.get("max_tokens", 2048),
+            "temperature": kwargs.get("temperature", 0.7),
+            "timeout": kwargs.get("timeout", 30),
+            "max_retries": kwargs.get("max_retries", 3),
+            "connection_pool_size": kwargs.get("connection_pool_size", 5),
+        }
+
+        # 可选参数
+        if "api_base" in kwargs:
+            llm_kwargs["api_base"] = kwargs["api_base"]
+
+        logger.info(f"创建Mimo LLM实例 - 环境: {environment}, 模型: {llm_kwargs['model_name']}")
+        return EnhancedMimoClient(**llm_kwargs)
 
     def _create_mock_llm(self, environment: str, kwargs: Dict[str, Any]) -> LLMInterface:
         """创建模拟LLM实例"""

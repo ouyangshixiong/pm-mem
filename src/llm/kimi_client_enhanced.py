@@ -1,7 +1,7 @@
 """
-增强的DeepSeek API客户端
+增强的Kimi API客户端
 
-在现有deepseek_client.py基础上，支持增强的LLM接口功能。
+在现有kimi_client.py基础上，支持增强的LLM接口功能。
 """
 
 import os
@@ -23,17 +23,17 @@ from .llm_interface_enhanced import EnhancedLLMClientBase, LLMResponse, LLMCallM
 logger = logging.getLogger(__name__)
 
 
-class EnhancedDeepSeekClient(EnhancedLLMClientBase):
-    """增强的DeepSeek API客户端"""
+class EnhancedKimiClient(EnhancedLLMClientBase):
+    """增强的Kimi API客户端"""
 
     # 默认API基础URL
-    DEFAULT_API_BASE = "https://api.deepseek.com"
+    DEFAULT_API_BASE = "https://api.moonshot.cn/v1"
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model_name: str = "deepseek-chat",
+        model_name: str = "kimi-k2-0905-preview",
         max_tokens: int = 2048,
         temperature: float = 0.7,
         timeout: int = 30,
@@ -41,10 +41,10 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
         connection_pool_size: int = 5,
     ):
         """
-        初始化增强的DeepSeek客户端
+        初始化增强的Kimi客户端
 
         Args:
-            api_key: DeepSeek API密钥，如为None则从环境变量DEEPSEEK_API_KEY读取
+            api_key: Kimi API密钥，如为None则从环境变量KIMI_API_KEY读取
             api_base: API基础URL，如为None则使用默认值
             model_name: 模型名称
             max_tokens: 最大生成令牌数
@@ -63,14 +63,14 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
         )
 
         # 获取API密钥
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+        self.api_key = api_key or os.getenv("KIMI_API_KEY")
         if not self.api_key:
             raise ValueError(
-                "未提供DeepSeek API密钥。请通过参数提供或设置环境变量DEEPSEEK_API_KEY"
+                "未提供Kimi API密钥。请通过参数提供或设置环境变量KIMI_API_KEY"
             )
 
         # 设置API基础URL
-        self.api_base = api_base or os.getenv("DEEPSEEK_API_BASE") or self.DEFAULT_API_BASE
+        self.api_base = api_base or os.getenv("KIMI_API_BASE") or self.DEFAULT_API_BASE
 
         # 初始化OpenAI客户端（同步和异步）
         self.client = OpenAI(
@@ -85,11 +85,11 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
             timeout=self.timeout,
         )
 
-        logger.info(f"增强的DeepSeek客户端已初始化 - 模型: {model_name}, API基础URL: {self.api_base}")
+        logger.info(f"增强的Kimi客户端已初始化 - 模型: {model_name}, API基础URL: {self.api_base}")
 
     def _execute_call(self, prompt: str, connection, **kwargs) -> str:
         """
-        执行实际的DeepSeek API调用
+        执行实际的Kimi API调用
 
         Args:
             prompt: 输入提示词
@@ -151,13 +151,13 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
                 break
 
         # 所有重试都失败
-        error_msg = f"DeepSeek API调用失败，已重试{max_retries}次: {last_error}"
+        error_msg = f"Kimi API调用失败，已重试{max_retries}次: {last_error}"
         logger.error(error_msg)
         raise Exception(error_msg)
 
     async def async_call(self, prompt: str, **kwargs) -> LLMResponse:
         """
-        异步调用DeepSeek API
+        异步调用Kimi API
 
         Args:
             prompt: 输入提示词
@@ -242,7 +242,7 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
                     break
 
             # 所有重试都失败
-            error_msg = f"DeepSeek API异步调用失败，已重试{max_retries}次: {last_error}"
+            error_msg = f"Kimi API异步调用失败，已重试{max_retries}次: {last_error}"
             logger.error(error_msg)
             raise Exception(error_msg)
 
@@ -254,7 +254,7 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
 
     def stream_call(self, prompt: str, **kwargs) -> Generator[str, None, None]:
         """
-        流式调用DeepSeek API
+        流式调用Kimi API
 
         Args:
             prompt: 输入提示词
@@ -294,7 +294,7 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
 
     async def async_stream_call(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
         """
-        异步流式调用DeepSeek API
+        异步流式调用Kimi API
 
         Args:
             prompt: 输入提示词
@@ -333,10 +333,10 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
             raise
 
     def get_model_info(self) -> Dict[str, Any]:
-        """获取DeepSeek模型信息"""
+        """获取Kimi模型信息"""
         info = super().get_model_info()
         info.update({
-            "provider": "DeepSeek",
+            "provider": "Kimi",
             "api_base": self.api_base,
             "supports_streaming": True,
             "supports_async": True,
@@ -344,22 +344,22 @@ class EnhancedDeepSeekClient(EnhancedLLMClientBase):
         return info
 
     @classmethod
-    def from_env(cls, **kwargs) -> "EnhancedDeepSeekClient":
+    def from_env(cls, **kwargs) -> "EnhancedKimiClient":
         """
-        从环境变量创建增强的DeepSeek客户端
+        从环境变量创建增强的Kimi客户端
 
         Args:
             **kwargs: 传递给构造函数的额外参数
 
         Returns:
-            EnhancedDeepSeekClient实例
+            EnhancedKimiClient实例
         """
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        api_base = os.getenv("DEEPSEEK_API_BASE")
+        api_key = os.getenv("KIMI_API_KEY")
+        api_base = os.getenv("KIMI_API_BASE")
 
         if not api_key:
             raise ValueError(
-                "环境变量DEEPSEEK_API_KEY未设置。请在.env文件中设置或导出环境变量"
+                "环境变量KIMI_API_KEY未设置。请在.env文件中设置或导出环境变量"
             )
 
         return cls(api_key=api_key, api_base=api_base, **kwargs)

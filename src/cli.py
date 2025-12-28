@@ -10,13 +10,60 @@ dotenv.load_dotenv()
 def _create_llm(provider: Optional[str]):
     if provider == "mock":
         from src.llm.mock_llm import MockLLM
-
         return MockLLM()
 
+    # 支持 kimi provider
+    if provider == "kimi":
+        api_key = os.getenv("KIMI_API_KEY")
+        if not api_key:
+            from src.llm.mock_llm import MockLLM
+            return MockLLM()
+
+        timeout_env = os.getenv("LLM_TIMEOUT")
+        max_retries_env = os.getenv("LLM_MAX_RETRIES")
+        kwargs = {}
+        if timeout_env:
+            try:
+                kwargs["timeout"] = int(timeout_env)
+            except ValueError:
+                pass
+        if max_retries_env:
+            try:
+                kwargs["max_retries"] = int(max_retries_env)
+            except ValueError:
+                pass
+
+        from src.llm.kimi_client import KimiClient
+        return KimiClient.from_env(**kwargs)
+
+    # 支持 mimo provider
+    if provider == "mimo":
+        api_key = os.getenv("MIMO_API_KEY")
+        if not api_key:
+            from src.llm.mock_llm import MockLLM
+            return MockLLM()
+
+        timeout_env = os.getenv("LLM_TIMEOUT")
+        max_retries_env = os.getenv("LLM_MAX_RETRIES")
+        kwargs = {}
+        if timeout_env:
+            try:
+                kwargs["timeout"] = int(timeout_env)
+            except ValueError:
+                pass
+        if max_retries_env:
+            try:
+                kwargs["max_retries"] = int(max_retries_env)
+            except ValueError:
+                pass
+
+        from src.llm.mimo_client import MimoClient
+        return MimoClient.from_env(**kwargs)
+
+    # 默认使用 deepseek
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         from src.llm.mock_llm import MockLLM
-
         return MockLLM()
 
     timeout_env = os.getenv("LLM_TIMEOUT")
@@ -34,7 +81,6 @@ def _create_llm(provider: Optional[str]):
             pass
 
     from src.llm.deepseek_client import DeepSeekClient
-
     return DeepSeekClient.from_env(**kwargs)
 
 
@@ -84,7 +130,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="pm-mem")
     subparsers = parser.add_subparsers(dest="cmd")
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--llm", choices=["mock", "deepseek"], default=None)
+    common.add_argument("--llm", choices=["mock", "deepseek", "mimo", "kimi"], default=None)
     common.add_argument("--persist", default="./data/memory.json")
     common.add_argument("--max-iterations", type=int, default=8)
     common.add_argument("--retrieval-k", type=int, default=5)

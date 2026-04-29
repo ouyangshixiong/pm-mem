@@ -10,6 +10,8 @@ pm-mem实现了ReMem方法论的核心思想：让LLM Agent的记忆从静态的
 
 - **ReMem主循环**: 实现完整的Think/Refine/Act状态机，支持最大迭代次数限制和强制终止机制
 - **动态记忆编辑**: 支持DELETE/ADD/MERGE/RELABEL四种原子操作，实现严格的Refine命令语法解析
+- **短剧分层记忆**: 新增基于Markdown文件的多作品隔离记忆体系，支持作品元数据、核心设定、人物档案、情节脉络、剧本档案、分镜档案六层管理
+- **Web记忆管理页**: 新增无鉴权FastAPI管理页，可直接创建作品、查看和编辑分层记忆、切换锁定状态
 - **多LLM支持**: 统一OpenAI兼容接口，支持DeepSeek、Kimi、Mimo三种LLM提供商
 - **LLM驱动的检索**: 基于LLM API的文本相关性排序检索，不使用向量数据库和embedding技术
 - **记忆库管理**: 实现MemoryEntry和MemoryBank类，支持序列化和持久化存储
@@ -92,6 +94,14 @@ MIMO_MODEL=mimo-v2-flash
 3. 根据需要修改配置文件`configs/local.yaml`
 
 ### 基本用法
+
+#### 短剧记忆管理 Web 页面
+
+```bash
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
+```
+
+访问 `http://127.0.0.1:8000`。详细说明见 [短剧创作系统使用说明](docs/short_drama_usage.md)。
 
 #### 方式1: 使用 CLI（推荐）
 

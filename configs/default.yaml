@@ -20,8 +20,19 @@ llm:
 memory:
   max_entries: 1000
   persistence_path: "./data/memory.json"
+  works_dir: "./works"
   backup_dir: "./backups"
   prune_ratio: 0.2  # 清理比例20%
+
+# 短剧创作配置
+short_drama:
+  default_prompt_layers:
+    - work_metadata
+    - core_setting
+    - character_profile
+    - plot_context
+    - script_archive
+    - storyboard_archive
 
 # ReMem Agent配置
 agent:

@@ -45,6 +45,7 @@ class MemoryBank:
         # 如果已达到最大容量，删除最旧的条目以腾出空间
         if len(self.entries) >= self.max_entries:
             logger.warning(f"记忆库已达最大容量 {self.max_entries}，将删除最旧的条目")
+            original_count = len(self.entries)
             # 按时间排序，删除最旧的
             self.entries.sort(key=lambda e: e.timestamp)
             deleted_entry = self.entries.pop(0)
@@ -53,7 +54,11 @@ class MemoryBank:
                 operation_type="prune",
                 details={
                     "deleted_entry_id": deleted_entry.id,
-                    "reason": "capacity_full"
+                    "reason": "capacity_full",
+                    "original_count": original_count,
+                    "deleted_count": 1,
+                    "remaining_count": len(self.entries),
+                    "deleted_entries": [deleted_entry.id],
                 },
                 success=True
             )
@@ -404,10 +409,11 @@ class MemoryBank:
 
 ### 必须遵守的规则
 1. **JSON格式**: 必须输出有效的JSON对象，包含"results"数组
-2. **只输出前{k}个**: 仅返回与查询最相关的前{k}个条目，按relevance_score降序
-3. **评分范围**: 所有评分必须在0.0-1.0范围内，保留两位小数
-4. **解释质量**: 解释应该简洁明了（1-2句话），说明为什么相关或不相关
-5. **索引对应**: 每个条目的index必须与记忆条目列表中的索引一致
+2. **完整性**: 必须包含index、relevance_score、semantic_relevance、task_applicability、timeliness、explanation字段
+3. **只输出前{k}个**: 仅返回与查询最相关的前{k}个条目，按relevance_score降序
+4. **评分范围**: 所有评分必须在0.0-1.0范围内，保留两位小数
+5. **解释质量**: 解释应该简洁明了（1-2句话），说明为什么相关或不相关
+6. **索引对应**: 每个条目的index必须与记忆条目列表中的索引一致
 
 ### 错误预防提示
 1. **不要排序**: 保持原始顺序，我们会按relevance_score排序
@@ -420,6 +426,15 @@ class MemoryBank:
 
 ### 高度相关的记忆（示例项说明）
 包含较高的 "semantic_relevance" 与 "task_applicability"，并且 "timeliness" 较高
+示例：
+{{
+  "index": 0,
+  "relevance_score": 0.92,
+  "semantic_relevance": 0.95,
+  "task_applicability": 0.90,
+  "timeliness": 0.85,
+  "explanation": "记忆直接覆盖当前任务，并给出可复用方案"
+}}
 
 ### 中等相关的记忆（示例项说明）
 相关信息部分匹配，需要适当调整，时效性一般
@@ -442,6 +457,8 @@ class MemoryBank:
             try:
                 model_info = llm.get_model_info()
             except Exception:
+                model_info = {}
+            if not isinstance(model_info, dict):
                 model_info = {}
             context_len = int(model_info.get("context_length_tokens", 64000))
             # 估算字符预算（混合文本约0.5 token/char）
@@ -560,7 +577,7 @@ class MemoryBank:
                     fenced = result_text[start + 7:end].strip()
                     cleaned = fenced.replace("…", "").replace("...", "")
                     result_data = json.loads(cleaned)
-                    logger.debug("从JSON代码块解析成功")
+                    logger.debug("从文本中提取JSON成功")
                     return result_data
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"JSON代码块解析失败: {e}")
@@ -626,7 +643,8 @@ class MemoryBank:
                     else:
                         arr_end = -1
 
-                    if arr_end != -1:
+                    has_closing_object = result_text.find('}', arr_end + 1) != -1
+                    if arr_end != -1 and has_closing_object:
                         array_str = result_text[arr_start:arr_end + 1]
                         # 清理常见噪音
                         array_str = array_str.replace("```json", "").replace("```", "")
@@ -641,7 +659,7 @@ class MemoryBank:
             logger.warning(f"提取results数组重构JSON失败: {e}")
 
         # 记录原始响应（前500个字符）用于调试
-        # logger.error(f"无法解析JSON响应，原始响应前500字符: {result_text[:500]}...")
+        logger.error(f"无法解析JSON响应，原始响应前200字符: {result_text[:200]}...")
         return None
 
     def _validate_and_parse_score(self, item: Dict[str, Any], score_key: str, default: float = 0.5) -> float:
@@ -755,7 +773,7 @@ class MemoryBank:
                         # )
                 except (ValueError, TypeError):
                     pass  # 忽略计算错误
-        # logger.debug(f"成功解析'{score_key}'评分: {score}")
+        logger.debug(f"成功解析'{score_key}'评分: {score}")
         return score
 
     def _fallback_retrieval(

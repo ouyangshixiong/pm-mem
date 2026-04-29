@@ -24,10 +24,12 @@ classifiers = [
 
 dependencies = [
     "requests>=2.31.0",
-    "openai>=1.12.0",
+    "openai>=1.12.0,<1.14.0",
     "pyyaml>=6.0",
     "structlog>=23.0.0",
-    "python-dotenv>=0.21.1",
+    "python-dotenv>=0.21.0,<0.22.0",
+    "fastapi>=0.103.0,<0.104.0",
+    "uvicorn>=0.22.0,<0.23.0",
 ]
 
 [project.optional-dependencies]
@@ -35,9 +37,10 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.11.0",
+    "httpx>=0.24.0,<0.25.0",
     "black>=23.0.0",
-    "flake8>=6.0.0",
-    "mypy>=1.5.0",
+    "flake8>=5.0.0,<6.0.0",
+    "mypy>=1.4.0,<1.5.0",
 ]
 
 [project.urls]

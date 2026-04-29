@@ -1,25 +1,21 @@
 # 核心依赖
-python>=3.10
+# 运行依赖。测试/代码质量工具见 requirements-dev.txt。
 
 # LLM API客户端
-requests>=2.31.0
-openai>=1.12.0  # DeepSeek兼容OpenAI API
+requests>=2.22.0,<3.0.0
+openai>=1.12.0,<1.14.0  # DeepSeek兼容OpenAI API，兼容旧pip源的typing-extensions
+pydantic>=1.10.0,<2.0.0
+
+# Web记忆管理页
+# 当前代码兼容 FastAPI 0.103.x；上限避免旧 pip 源找不到 0.104+。
+fastapi>=0.103.0,<0.104.0
+uvicorn>=0.22.0,<0.23.0
 
 # 配置管理
-pyyaml>=6.0
+PyYAML>=5.1,<7.0
 
 # 日志
 structlog>=23.0.0
 
-# 测试
-pytest>=7.4.0
-pytest-cov>=4.1.0
-pytest-mock>=3.11.0
-
-# 代码质量
-black>=23.0.0
-flake8>=6.0.0
-mypy>=1.5.0
-
 # 开发工具
-python-dotenv>=1.0.0
+python-dotenv>=0.21.0,<0.22.0

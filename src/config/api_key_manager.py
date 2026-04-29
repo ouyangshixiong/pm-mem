@@ -215,7 +215,7 @@ class APIKeyManager:
 
     def _generate_key_id(self, provider: str, environment: str) -> str:
         """生成唯一的密钥ID"""
-        timestamp = int(time.time() * 1000)
+        timestamp = time.time_ns()
         hash_input = f"{provider}_{environment}_{timestamp}"
         hash_value = hashlib.md5(hash_input.encode()).hexdigest()[:8]
         return f"{provider}_{environment}_{hash_value}"

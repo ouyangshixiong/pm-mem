@@ -66,6 +66,7 @@ class MockLLM(LLMClientBase):
         self.enable_pattern_matching = enable_pattern_matching
         self.enable_latency_simulation = enable_latency_simulation
         self.latency_range = latency_range
+        self.response_function = None
         self.call_history = []  # 记录调用历史
         self.call_counter = 0  # 调用计数器
 
@@ -153,6 +154,12 @@ class MockLLM(LLMClientBase):
             "temperature": kwargs.get("temperature", self.temperature),
         })
 
+        if self.response_function is not None:
+            response = str(self.response_function(prompt))
+            latency = time.time() - start_time
+            self._update_stats(success=True, tokens=len(response.split()), latency=latency)
+            return response
+
         # 查找匹配的响应
         response = self._find_matching_response(prompt)
 
@@ -170,6 +177,10 @@ class MockLLM(LLMClientBase):
         )
 
         return response
+
+    def set_response_function(self, response_function: Callable[[str], str]) -> None:
+        """Set a callable response hook for tests and deterministic workflows."""
+        self.response_function = response_function
 
     def _simulate_latency(self) -> None:
         """模拟网络延迟"""

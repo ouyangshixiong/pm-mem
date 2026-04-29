@@ -1,0 +1,17 @@
+# pm-mem 全局配置文件
+# 短剧 Markdown 分层记忆默认存放在项目根目录 works/。
+
+memory:
+  works_dir: "./works"
+  persistence_path: "./data/memory.json"
+  max_entries: 1000
+
+short_drama:
+  default_prompt_layers:
+    - work_metadata
+    - core_setting
+    - character_profile
+    - plot_context
+    - script_archive
+    - storyboard_archive
+

@@ -15,6 +15,11 @@ from .mock_llm import MockLLM, MockLLMAdapter, DeterministicMockLLM
 from config.config_manager import get_config_manager
 from config.api_key_manager import get_api_key_manager, get_api_key
 
+try:
+    from .deepseek_client_enhanced import EnhancedDeepSeekClient
+except Exception:
+    EnhancedDeepSeekClient = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -67,9 +72,11 @@ class LLMFactory:
         self.config = self.DEFAULT_CONFIG.copy()
         if config:
             self.config.update(config)
+        else:
+            # 从全局配置管理器获取配置
+            self._load_config_from_manager()
 
-        # 从全局配置管理器获取配置
-        self._load_config_from_manager()
+        self._instances: Dict[str, LLMInterface] = {}
 
         # 健康检查状态
         self._health_status: Dict[str, Dict[str, Any]] = {}
@@ -173,10 +180,8 @@ class LLMFactory:
 
     def _create_deepseek_llm(self, environment: str, kwargs: Dict[str, Any]) -> LLMInterface:
         """创建DeepSeek LLM实例"""
-        try:
-            from .deepseek_client_enhanced import EnhancedDeepSeekClient  # 延迟导入以避免测试环境依赖
-        except Exception as e:
-            raise RuntimeError(f"DeepSeek客户端不可用: {e}")
+        if EnhancedDeepSeekClient is None:
+            raise RuntimeError("DeepSeek客户端不可用")
         # 获取API密钥
         api_key = self._get_api_key("deepseek", environment)
 

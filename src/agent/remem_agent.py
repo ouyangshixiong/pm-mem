@@ -9,12 +9,20 @@ import logging
 import re
 from datetime import datetime
 
-from ..llm.llm_interface import LLMInterface
-from ..memory.bank import MemoryBank
-from ..memory.entry import MemoryEntry
-from ..memory.retrieval_result import RetrievalResult
-from ..memory.editor import RefineEditor
-from ..memory.persistence import MemoryPersistence
+try:
+    from ..llm.llm_interface import LLMInterface
+    from ..memory.bank import MemoryBank
+    from ..memory.entry import MemoryEntry
+    from ..memory.retrieval_result import RetrievalResult
+    from ..memory.editor import RefineEditor
+    from ..memory.persistence import MemoryPersistence
+except ImportError:
+    from llm.llm_interface import LLMInterface
+    from memory.bank import MemoryBank
+    from memory.entry import MemoryEntry
+    from memory.retrieval_result import RetrievalResult
+    from memory.editor import RefineEditor
+    from memory.persistence import MemoryPersistence
 
 logger = logging.getLogger(__name__)
 
@@ -582,7 +590,6 @@ Act: [你的答案或动作]
 
             # 执行添加操作
             if delta["add"]:
-                from ..memory.entry import MemoryEntry
                 added_count = 0
                 added_entries = []
 
@@ -641,6 +648,8 @@ Act: [你的答案或动作]
                     try:
                         # 调整索引
                         adjusted_idx = self._adjust_index(idx, delta["delete"])
+                        if adjusted_idx is None and idx in delta["delete"] and self.M.entries:
+                            adjusted_idx = min(idx, len(self.M.entries) - 1)
                         if adjusted_idx is not None:
                             self.M.relabel(adjusted_idx, tag)
                             relabeled_count += 1
@@ -710,8 +719,6 @@ Act: [你的答案或动作]
 
     def _add_new_memory(self, task_input: str, action_result: str, feedback: str) -> None:
         """添加新记忆条目"""
-        from ..memory.entry import MemoryEntry
-
         # 提取实际动作内容（去掉"Act:"前缀）
         if action_result.startswith("Act:"):
             action_content = action_result[4:].strip()
@@ -736,7 +743,7 @@ Act: [你的答案或动作]
         # 这里返回模拟反馈
         return "success"
 
-    def get_edit_traces(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_edit_traces(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         获取编辑轨迹记录
 
@@ -746,7 +753,9 @@ Act: [你的答案或动作]
         Returns:
             编辑轨迹记录列表
         """
-        return self.edit_traces[-limit:] if self.edit_traces else []
+        if limit <= 0 or not self.edit_traces:
+            return []
+        return self.edit_traces[-limit:]
 
     def clear_edit_traces(self) -> None:
         """清空编辑轨迹记录"""
@@ -767,7 +776,8 @@ Act: [你的答案或动作]
                 "delete_count": 0,
                 "add_count": 0,
                 "merge_count": 0,
-                "relabel_count": 0
+                "relabel_count": 0,
+                "latest_edit": None,
             }
 
         total_edits = len(self.edit_traces)

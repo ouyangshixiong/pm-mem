@@ -56,8 +56,19 @@ class ConfigManager:
             "memory": {
                 "max_entries": 1000,
                 "persistence_path": "./data/memory.json",
+                "works_dir": "./works",
                 "backup_dir": "./backups",
                 "prune_ratio": 0.2,
+            },
+            "short_drama": {
+                "default_prompt_layers": [
+                    "work_metadata",
+                    "core_setting",
+                    "character_profile",
+                    "plot_context",
+                    "script_archive",
+                    "storyboard_archive",
+                ],
             },
             "agent": {
                 "max_iterations": 8,
@@ -167,6 +178,7 @@ class ConfigManager:
             # 记忆库配置
             "MEMORY_MAX_ENTRIES": "memory.max_entries",
             "MEMORY_PERSISTENCE_PATH": "memory.persistence_path",
+            "MEMORY_WORKS_DIR": "memory.works_dir",
             "MEMORY_BACKUP_DIR": "memory.backup_dir",
             "MEMORY_PRUNE_RATIO": "memory.prune_ratio",
 

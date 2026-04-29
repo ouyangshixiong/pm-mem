@@ -23,7 +23,18 @@ llm:
 memory:
   max_entries: 500  # 开发环境可以设置较小的容量
   persistence_path: "./data/memory-dev.json"
+  works_dir: "./works"
   backup_dir: "./backups/dev"
+
+# 短剧创作配置
+short_drama:
+  default_prompt_layers:
+    - work_metadata
+    - core_setting
+    - character_profile
+    - plot_context
+    - script_archive
+    - storyboard_archive
 
 # Agent配置
 agent:

@@ -73,7 +73,48 @@ print(result["output"])
 
 工作流会通过 `get_layer_content_for_prompt` 注入分层记忆正文，并通过 `update_memory_from_llm_output` 将 LLM 输出中的结构化记忆更新写回 Markdown。
 
-## 6. 测试与验收
+## 6. LLM 本地记忆检索 API
+
+pm-mem 提供只读的类 RAG 检索接口。它不使用向量库或 embedding，而是把作品的 Markdown 记忆层切成可追溯片段，交给 LLM 逐批判断相关性，再返回 top-k 证据；可选再基于证据生成答案。
+
+按作品 ID 检索：
+
+```bash
+curl -X POST http://localhost:8000/api/works/{work_id}/retrieve \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "职场见闻 当前主要人物和情节概要",
+    "target_layers": ["core_setting", "character_profile", "plot_context"],
+    "top_k": 6,
+    "include_answer": true
+  }'
+```
+
+按作品名检索：
+
+```bash
+curl -X POST http://localhost:8000/api/retrieve \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "work_name": "职场见闻",
+    "query": "当前主要人物和情节概要",
+    "target_layers": ["character_profile", "plot_context"],
+    "include_answer": true
+  }'
+```
+
+常用字段：
+
+- `query`：必填，检索问题。
+- `target_layers`：可选，默认按角色策略选择层；编剧默认读取核心设定、人物档案、情节脉络、剧本档案。
+- `top_k`：返回证据片段数量，默认 5。
+- `include_answer`：是否基于检索片段生成最终回答，默认 true。
+- `include_content`：是否返回证据正文，默认 true。
+- `fallback_to_text_score`：LLM 检索失败时是否退回文本匹配，默认 false。
+
+该接口不会写入或演化记忆。`/api/works/{work_id}/remem-task` 如需使用同一套 LLM 检索，可在 metadata 中传入 `"retrieval_mode": "llm"`；如只是查询，还应传入 `"update_memory": false`。
+
+## 7. 测试与验收
 
 当前项目所在 Python 环境会自动加载外部 pytest 插件时，可能受非本项目依赖影响。建议运行：
 

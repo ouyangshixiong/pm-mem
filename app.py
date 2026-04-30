@@ -22,9 +22,16 @@ from import_coordinator import (
     build_external_work_payload,
 )
 from local_llm_client import LocalResponsesLLMClient, load_import_llm_settings
+from local_llm_client import DeepSeekChatLLMClient
 import role_manager
 from src.agent.remem_agent import ReMemAgent
 from src.agent.roles import RoleFactory
+from src.memory.llm_retrieval import (
+    DEFAULT_MAX_CHUNK_CHARS,
+    DEFAULT_MAX_RESULT_CHARS,
+    DEFAULT_TOP_K,
+    LLMWorkRetriever,
+)
 from src.memory.schema import TaskContext
 from src.memory.stores import MarkdownLayerMemoryStore, MarkdownTraceStore
 
@@ -59,6 +66,22 @@ class ReMemTaskRequest(BaseModel):
     role_id: str = "screenwriter"
     task: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RetrievalRequest(BaseModel):
+    query: str
+    work_id: str = ""
+    work_name: str = ""
+    role_id: str = "screenwriter"
+    target_layers: List[str] = Field(default_factory=list)
+    top_k: int = DEFAULT_TOP_K
+    include_answer: bool = True
+    include_content: bool = True
+    answer_instructions: str = ""
+    max_chunk_chars: int = DEFAULT_MAX_CHUNK_CHARS
+    max_result_chars: int = DEFAULT_MAX_RESULT_CHARS
+    min_score: float = 0.0
+    fallback_to_text_score: bool = False
 
 
 class DeepSeekApiKeyUpdateRequest(BaseModel):
@@ -216,6 +239,29 @@ def api_run_remem_task(work_id: str, payload: ReMemTaskRequest) -> Dict[str, Any
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/works/{work_id}/retrieve")
+def api_retrieve_work_memory(
+    work_id: str,
+    payload: RetrievalRequest,
+) -> Dict[str, Any]:
+    try:
+        _ensure_work_exists(work_id)
+        return _run_retrieval(work_id, payload)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/retrieve")
+def api_retrieve_memory(payload: RetrievalRequest) -> Dict[str, Any]:
+    try:
+        work_id = payload.work_id.strip() or _find_work_id_by_name(payload.work_name)
+        return _run_retrieval(work_id, payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/works/{work_id}/traces")
 def api_list_work_traces(work_id: str, limit: int = 20) -> Dict[str, Any]:
     try:
@@ -299,18 +345,47 @@ def api_update_role_prompt(
 
 
 class _LocalGenerateAdapter:
-    """Callable wrapper so ReMemAgent can use the configured local LLM client."""
+    """Callable wrapper with local proxy primary and DeepSeek backup."""
 
     def __init__(self):
         self.settings = load_import_llm_settings()
         self.client = LocalResponsesLLMClient(self.settings)
+        self.backup_client = DeepSeekChatLLMClient(self.settings.deepseek_backup)
+        self.last_provider = "local_proxy_responses"
+        self.last_error = ""
 
     def __call__(self, prompt: str) -> str:
-        return self.client.generate(prompt)
+        primary_error = ""
+        try:
+            text = self.client.generate(prompt)
+            if text.strip():
+                self.last_provider = "local_proxy_responses"
+                self.last_error = ""
+                return text
+            primary_error = "local proxy LLM returned empty content"
+        except Exception as exc:
+            primary_error = str(exc)
+
+        try:
+            text = self.backup_client.generate(prompt)
+            if text.strip():
+                self.last_provider = "deepseek_backup"
+                self.last_error = primary_error
+                return text
+            backup_error = "DeepSeek returned empty content"
+        except Exception as exc:
+            backup_error = str(exc)
+
+        self.last_error = (
+            f"local_proxy_responses: {primary_error}; "
+            f"deepseek_backup: {backup_error}"
+        )
+        raise RuntimeError(self.last_error)
 
     def get_model_info(self) -> Dict[str, Any]:
         return {
             "model": self.settings.model,
+            "provider": self.last_provider,
             "context_length_tokens": 64000,
         }
 
@@ -331,11 +406,83 @@ def _find_work(work_id: str) -> Dict[str, Any]:
     raise FileNotFoundError(f"work not found: {work_id}")
 
 
+def _find_work_id_by_name(work_name: str) -> str:
+    name = str(work_name or "").strip()
+    if not name:
+        raise ValueError("work_id or work_name is required")
+    matches = [
+        work
+        for work in memory_manager.list_works()
+        if str(work.get("work_name") or "").strip() == name
+    ]
+    if not matches:
+        raise FileNotFoundError(f"work not found by name: {name}")
+    if len(matches) > 1:
+        raise ValueError(f"multiple works found by name: {name}; use work_id instead")
+    return str(matches[0]["work_id"])
+
+
 def _ensure_work_exists(work_id: str) -> None:
     try:
         _find_work(work_id)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _run_retrieval(work_id: str, payload: RetrievalRequest) -> Dict[str, Any]:
+    if not payload.query.strip():
+        raise ValueError("query is required")
+
+    work = _find_work(work_id)
+    role = RoleFactory.create(payload.role_id)
+    metadata = {"target_layers": payload.target_layers} if payload.target_layers else {}
+    policy = role.retrieval_policy(
+        TaskContext(
+            task_type="memory_retrieval",
+            source="web_api",
+            role_id=role.role_id,
+            metadata=metadata,
+        )
+    )
+    target_layers = payload.target_layers or list(policy.get("target_layers") or [])
+
+    llm = _LocalGenerateAdapter()
+    retriever = LLMWorkRetriever(
+        llm,
+        max_prompt_chars=load_import_llm_settings().max_prompt_chars,
+    )
+    result = retriever.retrieve(
+        work_id=work_id,
+        query=payload.query,
+        layer_ids=target_layers,
+        top_k=payload.top_k,
+        include_answer=payload.include_answer,
+        answer_instructions=payload.answer_instructions,
+        max_chunk_chars=payload.max_chunk_chars,
+        min_score=payload.min_score,
+        fallback_to_text_score=payload.fallback_to_text_score,
+    )
+    data = result.to_dict(
+        include_content=payload.include_content,
+        max_result_chars=payload.max_result_chars,
+    )
+    data.update(
+        {
+            "success": True,
+            "work": work,
+            "role": role.to_dict(),
+            "llm": {
+                "provider": llm.last_provider,
+                "model": llm.settings.model
+                if llm.last_provider == "local_proxy_responses"
+                else llm.settings.deepseek_backup.model,
+                "primary_model": llm.settings.model,
+                "deepseek_backup_model": llm.settings.deepseek_backup.model,
+                "last_error": llm.last_error,
+            },
+        }
+    )
+    return data
 
 
 def _save_deepseek_api_key(api_key: str) -> None:

@@ -16,12 +16,14 @@ except ImportError:  # pragma: no cover - package-only deployments may omit it
 try:
     from .bank import MemoryBank
     from .entry import MemoryEntry
+    from .llm_retrieval import LLMWorkRetriever
     from .persistence import MemoryPersistence
     from .retrieval_result import RetrievalResult
     from .schema import MemoryOperation, MemoryRecord, TaskContext
 except ImportError:  # pragma: no cover
     from memory.bank import MemoryBank
     from memory.entry import MemoryEntry
+    from memory.llm_retrieval import LLMWorkRetriever
     from memory.persistence import MemoryPersistence
     from memory.retrieval_result import RetrievalResult
     from memory.schema import MemoryOperation, MemoryRecord, TaskContext
@@ -296,11 +298,50 @@ class MarkdownLayerMemoryStore(MemoryStore):
             raise RuntimeError("memory_manager module is required")
         self.last_apply_result: Dict[str, Any] = {}
         self._last_work_id = ""
+        self.llm: Optional[Any] = None
+
+    def set_llm(self, llm: Any) -> None:
+        self.llm = llm
 
     def retrieve(self, query: str, context, role, k: int) -> List[MemoryRecord]:
         work_id = _work_id(context)
         self._last_work_id = work_id
         layer_ids = self._target_layers(context, role)
+        if context.metadata.get("retrieval_mode") == "llm":
+            if self.llm is None:
+                raise RuntimeError("LLM retrieval requires a configured llm")
+            run = LLMWorkRetriever(self.llm).retrieve(
+                work_id=work_id,
+                query=query,
+                layer_ids=layer_ids,
+                top_k=k,
+                include_answer=False,
+                fallback_to_text_score=bool(
+                    context.metadata.get("fallback_to_text_score", False)
+                ),
+            )
+            return [
+                MemoryRecord(
+                    id=hit.chunk.chunk_id,
+                    content=(
+                        f"## {hit.chunk.layer_name}\n"
+                        f"### {' / '.join(hit.chunk.heading_path) or '无标题'}\n"
+                        f"{hit.chunk.content}"
+                    ),
+                    metadata={
+                        "work_id": work_id,
+                        "layer_id": hit.chunk.layer_id,
+                        "layer_name": hit.chunk.layer_name,
+                        "layer_file": hit.chunk.layer_file,
+                        "heading_path": list(hit.chunk.heading_path),
+                        "reason": hit.reason,
+                        "matched_facts": list(hit.matched_facts),
+                        "retrieval_mode": "llm",
+                    },
+                    score=hit.score,
+                )
+                for hit in run.hits
+            ]
         records: List[MemoryRecord] = []
         for layer_id in layer_ids:
             try:

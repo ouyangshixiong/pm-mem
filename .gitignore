@@ -67,6 +67,7 @@ sprint-coordination.md
 pm*_quality_report.md
 sprint_delivery_report*.md
 test_data/
+test_memory.json
 
 # OS
 .DS_Store

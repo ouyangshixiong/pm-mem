@@ -6,6 +6,25 @@ memory:
   persistence_path: "./data/memory.json"
   max_entries: 1000
 
+local_llm:
+  endpoint: "http://localhost:8317/v1/responses"
+  model: "gpt-5.4"
+  api_key: "your-api-key-1"
+  timeout: 300
+  stream: true
+
+deepseek_backup:
+  endpoint: "https://api.deepseek.com/chat/completions"
+  model: "deepseek-v4-pro"
+  api_key: ""
+  timeout: 120
+  thinking_enabled: true
+  reasoning_effort: "high"
+
+import_llm:
+  fallback_to_deterministic: true
+  max_prompt_chars: 24000
+
 short_drama:
   default_prompt_layers:
     - work_metadata
@@ -14,4 +33,3 @@ short_drama:
     - plot_context
     - script_archive
     - storyboard_archive
-

@@ -11,6 +11,14 @@ def test_app_api_work_and_layer_lifecycle(tmp_path, monkeypatch):
     assert home.status_code == 200
     assert "短剧创作系统 - 记忆管理" in home.text
 
+    roles = client.get("/api/roles")
+    assert roles.status_code == 200
+    assert any(role["role_name"] == "编剧" for role in roles.json()["roles"])
+
+    llm_config = client.get("/api/import/llm-config")
+    assert llm_config.status_code == 200
+    assert llm_config.json()["model"] == "gpt-5.4"
+
     created = client.post("/api/works", json={"work_name": "Web测试短剧"})
     assert created.status_code == 200
     work_id = created.json()["work"]["work_id"]

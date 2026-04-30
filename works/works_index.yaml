@@ -1,1 +1,6 @@
-works: []
+works:
+- work_id: a5e41eda-a934-4a99-9544-bd6f5dad5f4a
+  work_name: 职场见闻第一集
+  create_time: '2026-04-30 07:25:32'
+  update_time: '2026-04-30 09:54:23'
+  status: active

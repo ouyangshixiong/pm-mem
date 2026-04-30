@@ -15,6 +15,23 @@ llm:
     # api_key: "your_deepseek_api_key_here"
     # api_base: "https://api.deepseek.com"  # 可选，默认使用官方API
 
+# 外部作品导入备用 DeepSeek 配置。
+# 导入流程固定先调用 local_llm；如果失败或返回空，再使用这里的 DeepSeek 配置。
+local_llm:
+  endpoint: "http://localhost:8317/v1/responses"
+  model: "gpt-5.4"
+  api_key: "your-api-key-1"
+  timeout: 300
+  stream: true
+
+deepseek_backup:
+  endpoint: "https://api.deepseek.com/chat/completions"
+  model: "deepseek-v4-pro"
+  # api_key: "your_deepseek_api_key_here"
+  timeout: 120
+  thinking_enabled: true
+  reasoning_effort: "high"
+
 # 或者使用模拟LLM进行开发和测试
 # llm:
 #   provider: "mock"

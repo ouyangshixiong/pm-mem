@@ -16,6 +16,31 @@ llm:
     api_key: ""  # 从环境变量 DEEPSEEK_API_KEY 读取
     api_base: "https://api.deepseek.com"
 
+# 本地 OpenAI Responses 兼容模型配置，用于外部作品导入时的角色提炼
+local_llm:
+  endpoint: "http://localhost:8317/v1/responses"
+  model: "gpt-5.4"
+  api_key: "your-api-key-1"
+  timeout: 300
+  stream: true
+  max_output_tokens:
+  temperature:
+
+deepseek_backup:
+  endpoint: "https://api.deepseek.com/chat/completions"
+  model: "deepseek-v4-pro"
+  api_key: ""  # 从环境变量 DEEPSEEK_API_KEY 或 PM_MEM_DEEPSEEK_API_KEY 读取
+  timeout: 120
+  thinking_enabled: true
+  reasoning_effort: "high"
+  max_tokens:
+  temperature:
+
+# 导入流程中的角色 LLM 处理配置
+import_llm:
+  fallback_to_deterministic: true
+  max_prompt_chars: 24000
+
 # 记忆库配置
 memory:
   max_entries: 1000

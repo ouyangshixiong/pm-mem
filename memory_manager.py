@@ -149,7 +149,19 @@ def get_work_layers(work_id: str) -> List[Dict[str, Any]]:
                 "locked": bool(metadata.get("locked", False)),
                 "last_updated": metadata.get("last_updated", ""),
                 "updated_by": metadata.get("updated_by", ""),
+                "import_agent_name": metadata.get("import_agent_name", ""),
+                "processed_by_role_id": metadata.get("processed_by_role_id", ""),
+                "processed_by_role_name": metadata.get("processed_by_role_name", ""),
+                "role_prompt_file": metadata.get("role_prompt_file", ""),
+                "role_prompt_hash": metadata.get("role_prompt_hash", ""),
+                "llm_provider": metadata.get("llm_provider", ""),
+                "llm_processed": bool(metadata.get("llm_processed", False)),
+                "llm_model": metadata.get("llm_model", ""),
+                "llm_endpoint": metadata.get("llm_endpoint", ""),
+                "llm_primary_error": metadata.get("llm_primary_error", ""),
+                "llm_error": metadata.get("llm_error", ""),
                 "summary": _summarize(content),
+                "metadata": metadata,
             }
         )
     return layers
@@ -180,6 +192,7 @@ def update_layer_content(
     content: str,
     operator: str,
     lock_status: bool = None,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Update a layer body and metadata while enforcing layer lock rules."""
     if not isinstance(content, str):
@@ -196,13 +209,22 @@ def update_layer_content(
         raise PermissionError("locked layer can only be modified by 制片人 or 用户手动修改")
 
     now = _now()
-    metadata["locked"] = bool(metadata.get("locked", False) if lock_status is None else lock_status)
+    metadata["locked"] = bool(
+        metadata.get("locked", False) if lock_status is None else lock_status
+    )
     metadata["last_updated"] = now
     metadata["updated_by"] = operator
+    if extra_metadata:
+        metadata.update(extra_metadata)
     _write_layer_file(layer_path, metadata, content)
     _sync_config_lock_status(work_id, layer["layer_id"], metadata["locked"], now)
     _touch_index(work_id, now)
     return True
+
+
+def get_layer_definition(layer_id: str) -> Dict[str, str]:
+    """Return static layer metadata by layer id."""
+    return dict(_layer_by_id(layer_id))
 
 
 def toggle_layer_lock(work_id: str, layer_id: str, locked: bool) -> bool:
@@ -419,6 +441,9 @@ def _format_layer_file(metadata: Dict[str, Any], content: str) -> str:
         "last_updated": metadata["last_updated"],
         "updated_by": metadata["updated_by"],
     }
+    for key, value in metadata.items():
+        if key not in ordered:
+            ordered[key] = value
     front_matter = yaml.safe_dump(ordered, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{front_matter}\n---\n{content}"
 

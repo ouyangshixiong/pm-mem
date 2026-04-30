@@ -48,8 +48,13 @@ def test_short_drama_workflow_injects_memory_and_respects_locks(tmp_path, monkey
 
     assert "林澈怕水" in llm.last_prompt
     assert result["memory_updated"] is True
+    assert result["remem_result"]["role"]["role_name"] == "编剧"
 
     core_setting = memory_manager.get_layer_content(work_id, "core_setting")
     script_archive = memory_manager.get_layer_content(work_id, "script_archive")
     assert "从不怕水" not in core_setting["content"]
     assert "旧码头救下女主" in script_archive["content"]
+
+    traces = memory_manager.get_work_traces(work_id)
+    assert traces
+    assert traces[0]["role"]["role_name"] == "编剧"

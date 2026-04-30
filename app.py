@@ -18,8 +18,12 @@ from import_coordinator import (
     ExternalWorkImportCoordinator,
     build_external_work_payload,
 )
-from local_llm_client import load_import_llm_settings
+from local_llm_client import LocalResponsesLLMClient, load_import_llm_settings
 import role_manager
+from src.agent.remem_agent import ReMemAgent
+from src.agent.roles import RoleFactory
+from src.memory.schema import TaskContext
+from src.memory.stores import MarkdownLayerMemoryStore, MarkdownTraceStore
 
 
 app = FastAPI(title="短剧创作系统 - 记忆管理")
@@ -45,6 +49,13 @@ class ExternalWorkImportRequest(BaseModel):
     images: List[str] = Field(default_factory=list)
     raw_payload: Optional[Dict[str, Any]] = None
     dry_run: bool = False
+
+
+class ReMemTaskRequest(BaseModel):
+    task_type: str = "generic_workflow_step"
+    role_id: str = "screenwriter"
+    task: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -150,6 +161,63 @@ def api_update_layer(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/works/{work_id}/remem-task")
+def api_run_remem_task(work_id: str, payload: ReMemTaskRequest) -> Dict[str, Any]:
+    if not payload.task.strip():
+        raise HTTPException(status_code=400, detail="task is required")
+
+    try:
+        _ensure_work_exists(work_id)
+        role = RoleFactory.create(payload.role_id)
+        metadata = dict(payload.metadata or {})
+        metadata["work_id"] = work_id
+        context = TaskContext(
+            task_type=payload.task_type,
+            source="web_api",
+            role_id=role.role_id,
+            metadata=metadata,
+        )
+        llm = _LocalGenerateAdapter()
+        agent = ReMemAgent(
+            llm=llm,
+            memory_store=MarkdownLayerMemoryStore(),
+            trace_store=MarkdownTraceStore(),
+        )
+        result = agent.run_task(payload.task, role=role, context=context)
+        return {
+            "success": True,
+            "task_id": result.get("task_id"),
+            "role": result.get("role"),
+            "action_output": result.get("action_output"),
+            "retrieved_memories": result.get("retrieved_memories", []),
+            "think_traces": result.get("think_traces", []),
+            "refine_operations": result.get("refine_operations", []),
+            "applied_operations": result.get("applied_operations", []),
+            "conflicts": result.get("conflicts", []),
+            "memory_updated": result.get("memory_updated", False),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/works/{work_id}/traces")
+def api_list_work_traces(work_id: str, limit: int = 20) -> Dict[str, Any]:
+    try:
+        _ensure_work_exists(work_id)
+        return {"traces": memory_manager.get_work_traces(work_id, limit=limit)}
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/works/{work_id}/traces/{task_id}")
+def api_get_work_trace(work_id: str, task_id: str) -> Dict[str, Any]:
+    try:
+        _ensure_work_exists(work_id)
+        return memory_manager.get_work_trace(work_id, task_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/import/external-work")
 def api_import_external_work(payload: ExternalWorkImportRequest) -> Dict[str, Any]:
     if not payload.external_work_id.strip():
@@ -188,6 +256,23 @@ def api_list_roles() -> Dict[str, Any]:
 @app.get("/api/import/llm-config")
 def api_get_import_llm_config() -> Dict[str, Any]:
     return load_import_llm_settings().public_dict()
+
+
+class _LocalGenerateAdapter:
+    """Callable wrapper so ReMemAgent can use the configured local LLM client."""
+
+    def __init__(self):
+        self.settings = load_import_llm_settings()
+        self.client = LocalResponsesLLMClient(self.settings)
+
+    def __call__(self, prompt: str) -> str:
+        return self.client.generate(prompt)
+
+    def get_model_info(self) -> Dict[str, Any]:
+        return {
+            "model": self.settings.model,
+            "context_length_tokens": 64000,
+        }
 
 
 def _work_payload(work_id: str) -> Dict[str, Any]:
@@ -424,6 +509,26 @@ def _work_body() -> str:
   <h2>角色 Prompt 配置</h2>
   <div class="role-grid" id="rolesBody"></div>
 </section>
+<section class="panel mb-3">
+  <div class="d-flex align-items-start justify-content-between gap-3 mb-2">
+    <h2>记忆演化</h2>
+    <button class="btn btn-sm btn-outline-secondary" onclick="loadTraces()">刷新</button>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>任务</th>
+          <th>角色</th>
+          <th>状态</th>
+          <th>事件</th>
+          <th>更新时间</th>
+        </tr>
+      </thead>
+      <tbody id="tracesBody"></tbody>
+    </table>
+  </div>
+</section>
 <section class="panel">
   <h2>分层记忆</h2>
   <div class="table-responsive">
@@ -453,10 +558,11 @@ def _work_script(work_id: str) -> str:
 const WORK_ID = {json.dumps(work_id, ensure_ascii=False)};
 async function loadWork() {{
   try {{
-    const [data, rolesData, llmConfig] = await Promise.all([
+    const [data, rolesData, llmConfig, tracesData] = await Promise.all([
       requestJson('/api/works/' + encodeURIComponent(WORK_ID)),
       requestJson('/api/roles'),
-      requestJson('/api/import/llm-config')
+      requestJson('/api/import/llm-config'),
+      requestJson('/api/works/' + encodeURIComponent(WORK_ID) + '/traces')
     ]);
     const work = data.work;
     document.getElementById('breadcrumbName').textContent = work.work_name;
@@ -469,6 +575,7 @@ async function loadWork() {{
     `;
     renderLlmConfig(llmConfig);
     renderRoles(rolesData.roles || []);
+    renderTraces(tracesData.traces || []);
     document.getElementById('layersBody').innerHTML = data.layers.map(layer => `
       <tr>
         <td>${{escapeHtml(layer.layer_name)}}</td>
@@ -529,6 +636,30 @@ function renderLayerLlm(layer) {{
     return '<span class="badge lock-badge">调用失败</span>';
   }}
   return '<span class="badge muted-badge">未记录</span>';
+}}
+async function loadTraces() {{
+  try {{
+    const data = await requestJson('/api/works/' + encodeURIComponent(WORK_ID) + '/traces');
+    renderTraces(data.traces || []);
+  }} catch (err) {{
+    showMessage('status', err.message, 'danger');
+  }}
+}}
+function renderTraces(traces) {{
+  const body = document.getElementById('tracesBody');
+  if (!traces.length) {{
+    body.innerHTML = '<tr><td colspan="5" class="text-secondary">暂无演化轨迹</td></tr>';
+    return;
+  }}
+  body.innerHTML = traces.map(trace => `
+    <tr>
+      <td><div>${{escapeHtml(trace.task_input)}}</div><div class="mono text-secondary">${{escapeHtml(trace.task_id)}}</div></td>
+      <td>${{escapeHtml((trace.role || {{}}).role_name || (trace.role || {{}}).role_id || '')}}</td>
+      <td><span class="badge process-badge">${{escapeHtml(trace.status)}}</span></td>
+      <td>${{escapeHtml(trace.event_count)}}</td>
+      <td>${{escapeHtml(trace.finished_at || trace.started_at)}}</td>
+    </tr>
+  `).join('');
 }}
 loadWork();
 """

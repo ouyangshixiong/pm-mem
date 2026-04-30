@@ -18,6 +18,10 @@ from local_llm_client import (
 )
 import memory_manager
 import role_manager
+from src.agent.remem_agent import ReMemAgent
+from src.agent.roles import RoleFactory
+from src.memory.schema import TaskContext
+from src.memory.stores import MarkdownLayerMemoryStore, MarkdownTraceStore
 
 
 DEFAULT_SOURCE_SYSTEM = "外部创作系统"
@@ -370,14 +374,13 @@ class ExternalWorkImportCoordinator:
             drafts[draft.layer_id] = draft
 
         review = self.review_agent.build(payload, drafts)
+        remem_tasks: Dict[str, Dict[str, Any]] = {}
         if not dry_run and work_id is not None:
             for draft in drafts.values():
-                memory_manager.update_layer_content(
+                remem_tasks[draft.layer_id] = self._write_draft_via_remem(
                     work_id=work_id,
-                    layer_id=draft.layer_id,
-                    content=draft.content,
-                    operator=self.operator,
-                    extra_metadata=_draft_metadata(payload, draft),
+                    payload=payload,
+                    draft=draft,
                 )
 
         return {
@@ -413,7 +416,51 @@ class ExternalWorkImportCoordinator:
                 "content": review.content,
                 "notes": review.notes,
             },
+            "remem_tasks": remem_tasks,
             "web_url": f"/work/{work_id}" if work_id else None,
+        }
+
+    def _write_draft_via_remem(
+        self,
+        work_id: str,
+        payload: ExternalWorkPayload,
+        draft: LayerDraft,
+    ) -> Dict[str, Any]:
+        role = RoleFactory.create(draft.role_id)
+        task_input = (
+            f"导入外部作品《{payload.work_name}》的 {draft.layer_id} 层记忆。"
+            "请检索已有记忆，合并新增事实，锁定或冲突内容应标记而不是覆盖。\n\n"
+            f"{draft.content}"
+        )
+        context = TaskContext(
+            task_type="external_work_import",
+            source="external_work_import_coordinator",
+            role_id=role.role_id,
+            metadata={
+                "work_id": work_id,
+                "target_layers": [draft.layer_id],
+                "source_system": payload.source_system,
+                "external_work_id": payload.external_work_id,
+                "source_url": payload.source_url,
+                "llm_provider": draft.llm_provider,
+                "llm_model": draft.llm_model,
+                "layer_metadata": _draft_metadata(payload, draft),
+            },
+        )
+        agent = ReMemAgent(
+            llm=_SingleActLLM(draft.content),
+            memory_store=MarkdownLayerMemoryStore(),
+            trace_store=MarkdownTraceStore(),
+            max_iterations=1,
+            retrieval_k=6,
+        )
+        result = agent.run_task(task_input, role=role, context=context)
+        return {
+            "task_id": result.get("task_id"),
+            "status": result.get("status"),
+            "memory_updated": result.get("memory_updated", False),
+            "applied_operations": result.get("applied_operations", []),
+            "conflicts": result.get("conflicts", []),
         }
 
     def _process_draft_with_role_llm(
@@ -486,6 +533,21 @@ class ExternalWorkImportCoordinator:
             return ""
         except Exception as exc:
             return _clip(str(exc), 1000)
+
+
+class _SingleActLLM:
+    """Small deterministic adapter used to route prepared import drafts via ReMem."""
+
+    def __init__(self, action_output: str):
+        self.action_output = action_output
+
+    def __call__(self, prompt: str) -> str:
+        if "请选择下一步动作" in prompt or "请选择动作" in prompt:
+            return "act"
+        return f"Act: {self.action_output}"
+
+    def get_model_info(self) -> Dict[str, Any]:
+        return {"model": "deterministic-import-act", "context_length_tokens": 64000}
 
 
 def build_external_work_payload(

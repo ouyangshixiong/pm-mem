@@ -145,10 +145,18 @@ def test_external_work_import_calls_configured_role_llm(tmp_path, monkeypatch):
     assert result["layers"]["script_archive"]["role_name"] == "编剧"
 
     script = memory_manager.get_layer_content(result["work_id"], "script_archive")
+    core_setting = memory_manager.get_layer_content(result["work_id"], "core_setting")
+    metadata = memory_manager.get_layer_content(result["work_id"], "work_metadata")
     assert "LLM处理结果" in script["content"]
     assert script["metadata"]["processed_by_role_name"] == "编剧"
     assert script["metadata"]["llm_processed"] is True
     assert script["metadata"]["llm_model"] == "gpt-5.4"
+    assert "LLM处理结果" in core_setting["content"]
+    assert core_setting["metadata"]["processed_by_role_name"] == "制片人"
+    assert core_setting["metadata"]["import_agent_name"] == "核心设定整理智能体"
+    assert core_setting["metadata"]["llm_processed"] is True
+    assert core_setting["metadata"]["llm_model"] == "gpt-5.4"
+    assert metadata["metadata"]["import_agent_name"] == "作品元数据导入智能体"
 
 
 def test_external_work_import_uses_deepseek_backup_after_primary_failure(

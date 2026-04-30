@@ -4,9 +4,11 @@ ReMem Agent主循环
 实现完整的Think/Refine/Act状态机，支持最大迭代次数限制和强制终止机制。
 """
 
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Tuple
 import logging
 import re
+import uuid
+import json
 from datetime import datetime
 
 try:
@@ -16,6 +18,13 @@ try:
     from ..memory.retrieval_result import RetrievalResult
     from ..memory.editor import RefineEditor
     from ..memory.persistence import MemoryPersistence
+    from ..memory.schema import MemoryOperation, MemoryRecord, TaskContext
+    from ..memory.stores import (
+        InMemoryTraceStore,
+        JsonMemoryStore,
+        MemoryStore,
+    )
+    from .roles import GenericRole, MemoryRole
 except ImportError:
     from llm.llm_interface import LLMInterface
     from memory.bank import MemoryBank
@@ -23,6 +32,9 @@ except ImportError:
     from memory.retrieval_result import RetrievalResult
     from memory.editor import RefineEditor
     from memory.persistence import MemoryPersistence
+    from memory.schema import MemoryOperation, MemoryRecord, TaskContext
+    from memory.stores import InMemoryTraceStore, JsonMemoryStore, MemoryStore
+    from agent.roles import GenericRole, MemoryRole
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +46,8 @@ class ReMemAgent:
         self,
         llm: LLMInterface,
         memory_bank: Optional[MemoryBank] = None,
+        memory_store: Optional[MemoryStore] = None,
+        trace_store: Optional[Any] = None,
         persist_path: str = "./data/memory.json",
         max_iterations: int = 8,
         retrieval_k: int = 5,
@@ -45,137 +59,277 @@ class ReMemAgent:
         Args:
             llm: LLM接口实例
             memory_bank: 记忆库实例，如为None则创建新实例
+            memory_store: 可注入记忆存储后端；未传入时使用JSON MemoryBank
+            trace_store: 可注入轨迹存储后端；未传入时使用内存轨迹
             persist_path: 持久化存储路径
             max_iterations: 最大迭代次数
             retrieval_k: 检索返回的最相关记忆数量
             include_explanations: 是否包含相关性解释
         """
         self.llm = llm
-        self.M = memory_bank or MemoryBank()
         self.persistence = MemoryPersistence(persist_path)
         self.max_iterations = max_iterations
         self.retrieval_k = retrieval_k
         self.include_explanations = include_explanations
         self.edit_traces: List[Dict[str, Any]] = []  # 编辑轨迹记录
 
-        # 加载现有记忆
-        self.M = self.persistence.load(self.M)
+        if memory_store is None:
+            self.M = memory_bank if memory_bank is not None else MemoryBank()
+            # 加载现有JSON记忆，保持旧用法兼容。
+            self.M = self.persistence.load(self.M)
+            self.memory_store = JsonMemoryStore(
+                memory_bank=self.M,
+                persistence=self.persistence,
+                llm=self.llm,
+                include_explanations=include_explanations,
+            )
+        else:
+            self.M = (
+                memory_bank
+                if memory_bank is not None
+                else getattr(memory_store, "memory_bank", MemoryBank())
+            )
+            self.memory_store = memory_store
+            if hasattr(self.memory_store, "set_llm"):
+                self.memory_store.set_llm(self.llm)
+        self.trace_store = trace_store or InMemoryTraceStore()
 
         logger.info(
             f"ReMem Agent已初始化 - 最大迭代次数: {max_iterations}, "
-            f"检索数量: {retrieval_k}, 记忆条目: {len(self.M)}, "
+            f"检索数量: {retrieval_k}, 记忆条目: {self.memory_store.memory_size()}, "
             f"包含解释: {include_explanations}"
         )
 
-    def run_task(self, task_input: str) -> Dict[str, Any]:
+    def run_task(
+        self,
+        task_input: str,
+        role: Optional[MemoryRole] = None,
+        context: Optional[Union[TaskContext, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """
         运行单步任务
 
         Args:
             task_input: 任务输入 x_t
+            role: 注入角色；未传入时使用GenericRole
+            context: 任务上下文；业务元数据放在metadata中
 
         Returns:
             包含执行结果的字典
         """
+        role = role or GenericRole()
+        task_context = TaskContext.from_value(context)
+        if not task_context.role_id or task_context.role_id == "generic":
+            task_context.role_id = role.role_id
+        task_id = str(task_context.metadata.get("task_id") or uuid.uuid4())
+        task_context.metadata["task_id"] = task_id
+        task_context.metadata.setdefault("trace_id", task_id)
+
         traces: List[str] = []
-        retrieved_memories = []
+        think_traces: List[str] = []
+        refine_operations: List[Dict[str, Any]] = []
+        applied_operations: List[Dict[str, Any]] = []
+        conflicts: List[Dict[str, Any]] = []
+        retrieved_memories: List[MemoryRecord] = []
         retrieved_text = ""
 
         logger.info(f"开始处理任务: {task_input[:100]}...")
+        self.trace_store.record_task_started(task_id, task_input, task_context, role)
 
         for iteration in range(self.max_iterations):
             logger.debug(f"第 {iteration + 1}/{self.max_iterations} 次迭代")
 
-            # 检索相关记忆（使用新的检索方法）
-            retrieved_memories = self.M.retrieve(
-                self.llm,
+            retrieved_memories = self.memory_store.retrieve(
                 task_input,
+                context=task_context,
+                role=role,
                 k=self.retrieval_k,
-                include_explanations=self.include_explanations
             )
+            self.trace_store.record_retrieval(task_id, retrieved_memories)
 
-            # 构建检索文本（处理RetrievalResult和MemoryEntry两种类型）
             retrieved_text = self._format_retrieved_memories(retrieved_memories)
 
             # 让LLM选择动作
-            action = self._select_action(task_input, retrieved_text, traces)
+            action = self._select_action(
+                task_input, retrieved_text, traces, role=role, context=task_context
+            )
             action_lower = action.strip().lower()
 
             if action_lower == "think":
-                result = self._think(task_input, retrieved_text, traces)
+                result = self._think(
+                    task_input, retrieved_text, traces, role=role, context=task_context
+                )
                 traces.append(result)
+                think_traces.append(result)
+                self.trace_store.record_think(task_id, result)
                 logger.debug(f"Think: {result[:100]}...")
 
             elif action_lower == "refine":
-                delta, raw_cmd = self._refine(task_input, traces)
+                operations, raw_cmd = self._refine_operations(
+                    task_input,
+                    retrieved_text,
+                    traces,
+                    role=role,
+                    context=task_context,
+                )
                 traces.append(raw_cmd)
-
-                # 应用编辑操作（增强版，包含轨迹记录）
-                self._apply_delta_enhanced(delta, raw_cmd, iteration)
+                refine_operations.extend([operation.to_dict() for operation in operations])
+                apply_result = self.memory_store.apply_operations(
+                    operations, task_context, role
+                )
+                applied_operations.extend(apply_result.get("applied_operations", []))
+                conflicts.extend(apply_result.get("conflicts", []))
+                self._record_store_edit_trace(raw_cmd, operations, apply_result, iteration)
+                self.trace_store.record_refine(
+                    task_id, raw_cmd, operations, apply_result
+                )
                 logger.debug(f"Refine: {raw_cmd}")
 
             elif action_lower == "act":
-                result = self._act(task_input, retrieved_text, traces)
+                result = self._act(
+                    task_input, retrieved_text, traces, role=role, context=task_context
+                )
                 feedback = self._get_feedback(result)  # 模拟反馈，实际应从环境获取
 
-                # 添加新记忆条目
-                self._add_new_memory(task_input, result, feedback)
+                appended_record = self.memory_store.append_task_result(
+                    task_input,
+                    result,
+                    feedback,
+                    task_context,
+                    role,
+                )
+                append_apply_result = getattr(
+                    self.memory_store, "last_apply_result", {}
+                ) or {}
+                applied_operations.extend(
+                    append_apply_result.get("applied_operations", [])
+                )
+                conflicts.extend(append_apply_result.get("conflicts", []))
                 logger.debug(f"Act: {result[:100]}...")
 
-                # 持久化记忆库
-                self.persistence.save(self.M)
+                self.memory_store.save()
 
-                return {
+                response = {
                     "action": result,
+                    "action_output": result,
                     "traces": traces,
+                    "think_traces": think_traces,
+                    "refine_operations": refine_operations,
+                    "applied_operations": applied_operations,
+                    "conflicts": conflicts,
                     "memory_size": len(self.M),
                     "iterations": iteration + 1,
                     "retrieved_count": len(retrieved_memories),
                     "retrieved_memories": self._get_retrieval_details(retrieved_memories),
                     "edit_traces": self.get_edit_traces(),  # 返回编辑轨迹
                     "status": "completed",
+                    "task_id": task_id,
+                    "role": role.to_dict(),
+                    "memory_updated": bool(applied_operations),
                 }
+                response["memory_size"] = self.memory_store.memory_size()
+                self.trace_store.record_act(
+                    task_id, result, appended_record, append_apply_result
+                )
+                self.trace_store.record_task_finished(task_id, "completed", response)
+                return response
 
             else:
                 logger.warning(f"未知动作: {action}，强制转为Act")
                 traces.append(f"invalid action: {action}")
 
                 # 强制执行Act
-                result = self._act(task_input, retrieved_text, traces)
+                result = self._act(
+                    task_input, retrieved_text, traces, role=role, context=task_context
+                )
                 feedback = "forced"
-                self._add_new_memory(task_input, result, feedback)
-                self.persistence.save(self.M)
+                appended_record = self.memory_store.append_task_result(
+                    task_input,
+                    result,
+                    feedback,
+                    task_context,
+                    role,
+                )
+                append_apply_result = getattr(
+                    self.memory_store, "last_apply_result", {}
+                ) or {}
+                applied_operations.extend(
+                    append_apply_result.get("applied_operations", [])
+                )
+                conflicts.extend(append_apply_result.get("conflicts", []))
+                self.memory_store.save()
 
-                return {
+                response = {
                     "action": result,
+                    "action_output": result,
                     "traces": traces,
+                    "think_traces": think_traces,
+                    "refine_operations": refine_operations,
+                    "applied_operations": applied_operations,
+                    "conflicts": conflicts,
                     "memory_size": len(self.M),
                     "iterations": iteration + 1,
                     "retrieved_count": len(retrieved_memories),
                     "retrieved_memories": self._get_retrieval_details(retrieved_memories),
                     "edit_traces": self.get_edit_traces(),  # 返回编辑轨迹
                     "status": "forced",
+                    "task_id": task_id,
+                    "role": role.to_dict(),
+                    "memory_updated": bool(applied_operations),
                 }
+                response["memory_size"] = self.memory_store.memory_size()
+                self.trace_store.record_act(
+                    task_id, result, appended_record, append_apply_result
+                )
+                self.trace_store.record_task_finished(task_id, "forced", response)
+                return response
 
         # 超过最大迭代次数仍未Act，强制终止
         logger.warning(f"达到最大迭代次数 {self.max_iterations}，强制终止")
-        result = self._act(task_input, retrieved_text, traces)
+        result = self._act(
+            task_input, retrieved_text, traces, role=role, context=task_context
+        )
         feedback = "max_iterations_exceeded"
-        self._add_new_memory(task_input, result, feedback)
-        self.persistence.save(self.M)
+        appended_record = self.memory_store.append_task_result(
+            task_input,
+            result,
+            feedback,
+            task_context,
+            role,
+        )
+        append_apply_result = getattr(self.memory_store, "last_apply_result", {}) or {}
+        applied_operations.extend(append_apply_result.get("applied_operations", []))
+        conflicts.extend(append_apply_result.get("conflicts", []))
+        self.memory_store.save()
 
-        return {
+        response = {
             "action": result,
+            "action_output": result,
             "traces": traces,
+            "think_traces": think_traces,
+            "refine_operations": refine_operations,
+            "applied_operations": applied_operations,
+            "conflicts": conflicts,
             "memory_size": len(self.M),
             "iterations": self.max_iterations,
             "retrieved_count": len(retrieved_memories),
             "retrieved_memories": self._get_retrieval_details(retrieved_memories),
             "edit_traces": self.get_edit_traces(),  # 返回编辑轨迹
             "status": "max_iterations_exceeded",
+            "task_id": task_id,
+            "role": role.to_dict(),
+            "memory_updated": bool(applied_operations),
         }
+        response["memory_size"] = self.memory_store.memory_size()
+        self.trace_store.record_act(task_id, result, appended_record, append_apply_result)
+        self.trace_store.record_task_finished(
+            task_id, "max_iterations_exceeded", response
+        )
+        return response
 
-    def _format_retrieved_memories(self, retrieved_memories: List[Union[MemoryEntry, RetrievalResult]]) -> str:
+    def _format_retrieved_memories(
+        self, retrieved_memories: List[Union[MemoryEntry, RetrievalResult, MemoryRecord]]
+    ) -> str:
         """
         格式化检索到的记忆，支持RetrievalResult和MemoryEntry两种类型
 
@@ -187,7 +341,14 @@ class ReMemAgent:
         """
         formatted = []
         for i, item in enumerate(retrieved_memories):
-            if isinstance(item, RetrievalResult):
+            if isinstance(item, MemoryRecord):
+                score_text = (
+                    f" - 相关性评分: {item.score:.2f}"
+                    if item.score is not None
+                    else ""
+                )
+                formatted.append(f"[记忆 {i+1}{score_text}]\n{item.content}\n")
+            elif isinstance(item, RetrievalResult):
                 # 如果是RetrievalResult，包含评分和解释
                 formatted.append(
                     f"[记忆 {i+1} - 相关性评分: {item.relevance_score:.2f}]\n"
@@ -200,7 +361,9 @@ class ReMemAgent:
 
         return "\n".join(formatted)
 
-    def _get_retrieval_details(self, retrieved_memories: List[Union[MemoryEntry, RetrievalResult]]) -> List[Dict[str, Any]]:
+    def _get_retrieval_details(
+        self, retrieved_memories: List[Union[MemoryEntry, RetrievalResult, MemoryRecord]]
+    ) -> List[Dict[str, Any]]:
         """
         获取检索结果的详细信息
 
@@ -212,7 +375,17 @@ class ReMemAgent:
         """
         details = []
         for item in retrieved_memories:
-            if isinstance(item, RetrievalResult):
+            if isinstance(item, MemoryRecord):
+                details.append(
+                    {
+                        "type": "MemoryRecord",
+                        "id": item.id,
+                        "content": item.content,
+                        "metadata": item.metadata,
+                        "score": item.score,
+                    }
+                )
+            elif isinstance(item, RetrievalResult):
                 details.append({
                     "type": "RetrievalResult",
                     "memory_entry": item.memory_entry.to_dict(),
@@ -226,10 +399,27 @@ class ReMemAgent:
                 })
         return details
 
-    def _select_action(self, task_input: str, retrieved_text: str, traces: List[str]) -> str:
+    def _select_action(
+        self,
+        task_input: str,
+        retrieved_text: str,
+        traces: List[str],
+        role: Optional[MemoryRole] = None,
+        context: Optional[TaskContext] = None,
+    ) -> str:
         """选择下一步动作（Think/Refine/Act）"""
+        role_text = ""
+        if role is not None and context is not None:
+            role_text = f"""
+当前角色:
+{role.role_name}
+
+角色系统提示:
+{role.system_prompt()}
+"""
         prompt = f"""
 任务: {task_input}
+{role_text}
 
 相关记忆:
 {retrieved_text}
@@ -252,7 +442,14 @@ class ReMemAgent:
             logger.error(f"选择动作失败: {e}")
             return "act"  # 失败时默认执行Act
 
-    def _think(self, task_input: str, retrieved_text: str, traces: List[str]) -> str:
+    def _think(
+        self,
+        task_input: str,
+        retrieved_text: str,
+        traces: List[str],
+        role: Optional[MemoryRole] = None,
+        context: Optional[TaskContext] = None,
+    ) -> str:
         """执行Think动作（内部推理）"""
         # 验证输入参数
         if not task_input or not isinstance(task_input, str):
@@ -263,11 +460,21 @@ class ReMemAgent:
             logger.error("Think: traces参数必须是列表")
             return "Think: 内部错误 - traces参数无效"
 
+        role_prompt = role.system_prompt() if role is not None else ""
+        role_instructions = (
+            role.think_instructions(context) if role is not None and context is not None else ""
+        )
         # 构建提示词
         prompt = f"""
 Think: 请进行内部推理。
 
 任务: {task_input}
+
+角色提示:
+{role_prompt or "通用记忆演化角色"}
+
+角色关注点:
+{role_instructions or "分析任务需求、相关记忆和下一步策略。"}
 
 相关经验:
 {retrieved_text if retrieved_text else "无相关经验"}
@@ -398,6 +605,261 @@ DELETE 1,3; ADD{{用户喜欢简洁的界面设计}}; MERGE 0&2; RELABEL 4 ui-pr
             logger.error(f"Refine失败: {e}")
             return {"delete": [], "add": [], "merge": [], "relabel": []}, f"Refine异常: {str(e)}"
 
+    def _refine_operations(
+        self,
+        task_input: str,
+        retrieved_text: str,
+        traces: List[str],
+        role: MemoryRole,
+        context: TaskContext,
+    ) -> Tuple[List[MemoryOperation], str]:
+        """执行领域无关Refine动作，输出MemoryOperation列表。"""
+        prompt = f"""
+Refine: 请根据当前任务、检索记忆和角色约束，生成记忆演化操作。
+
+当前角色:
+{role.role_name}
+
+角色提示:
+{role.system_prompt()}
+
+角色记忆更新规则:
+{role.refine_instructions(context)}
+
+当前任务:
+{task_input}
+
+相关记忆:
+{retrieved_text if retrieved_text else "无相关记忆"}
+
+历史推理轨迹:
+{chr(10).join(traces[-3:]) if traces else "无历史推理"}
+
+允许的操作:
+{", ".join(role.allowed_operations(context))}
+
+请严格输出JSON对象，不要添加额外文字。格式如下：
+{{
+  "memory_operations": [
+    {{
+      "operation_type": "append",
+      "target": "memory.layer",
+      "content": "需要写入或标记的内容",
+      "metadata": {{"layer_id": "由存储后端解释的目标"}}
+    }}
+  ]
+}}
+
+如果无需更新记忆，输出：
+{{"memory_operations": [{{"operation_type": "no_op", "target": "", "content": "", "metadata": {{}}}}]}}
+"""
+        try:
+            raw_output = self.llm(prompt).strip()
+        except Exception as exc:
+            logger.error(f"Refine操作生成失败: {exc}")
+            raw_output = ""
+
+        operations = self._parse_memory_operations(raw_output)
+        if not operations:
+            operations = [
+                MemoryOperation(
+                    operation_type="no_op",
+                    target="",
+                    content="",
+                    metadata={"reason": "empty_or_unparseable_refine_output"},
+                )
+            ]
+        return operations, raw_output or "Refine: 空输出"
+
+    def _parse_memory_operations(self, raw_output: str) -> List[MemoryOperation]:
+        """Parse structured MemoryOperation output with legacy fallback."""
+        if not raw_output or not isinstance(raw_output, str):
+            return []
+
+        json_data = self._extract_json_object(raw_output)
+        if isinstance(json_data, dict):
+            raw_operations = (
+                json_data.get("memory_operations")
+                or json_data.get("operations")
+                or json_data.get("memory_updates")
+            )
+            if isinstance(raw_operations, list):
+                parsed = []
+                for item in raw_operations:
+                    if not isinstance(item, dict):
+                        continue
+                    if "memory_updates" in json_data and "operation_type" not in item:
+                        item = {
+                            "operation_type": (
+                                "replace" if item.get("mode") == "replace" else "append"
+                            ),
+                            "target": "memory.layer",
+                            "content": item.get("content", ""),
+                            "metadata": {"layer_id": item.get("layer_id", "")},
+                        }
+                    try:
+                        parsed.append(MemoryOperation.from_dict(item))
+                    except Exception as exc:
+                        logger.warning(f"跳过无效MemoryOperation: {exc}")
+                if parsed:
+                    return parsed
+
+        try:
+            delta = self._parse_legacy_refine_delta(raw_output)
+        except Exception:
+            return []
+        return self._delta_to_operations(delta)
+
+    def _parse_legacy_refine_delta(self, raw_output: str) -> Dict[str, Any]:
+        """Parse legacy RefineEditor commands while preserving semicolons in ADD{}."""
+        segments = self._split_legacy_refine_segments(raw_output)
+        delta = {"delete": [], "add": [], "merge": [], "relabel": []}
+        for segment in segments:
+            parsed = RefineEditor._parse_segment(segment)
+            if parsed.error:
+                logger.warning(f"解析命令段失败 '{segment}': {parsed.error}")
+                continue
+            command_type = getattr(parsed.command_type, "value", "")
+            if command_type == "DELETE":
+                delta["delete"].extend(parsed.indices or [])
+            elif command_type == "ADD" and parsed.text:
+                delta["add"].append(parsed.text)
+            elif command_type == "MERGE":
+                delta["merge"].extend(parsed.pairs or [])
+            elif command_type == "RELABEL":
+                delta["relabel"].extend(parsed.relabels or [])
+        return delta
+
+    def _split_legacy_refine_segments(self, raw_output: str) -> List[str]:
+        segments = []
+        current = []
+        brace_depth = 0
+        for char in raw_output:
+            if char == "{":
+                brace_depth += 1
+            elif char == "}" and brace_depth > 0:
+                brace_depth -= 1
+
+            if char == ";" and brace_depth == 0:
+                segment = "".join(current).strip()
+                if segment:
+                    segments.append(segment)
+                current = []
+                continue
+            current.append(char)
+
+        segment = "".join(current).strip()
+        if segment:
+            segments.append(segment)
+        return segments
+
+    def _extract_json_object(self, raw_output: str) -> Optional[Dict[str, Any]]:
+        candidates = []
+        fenced = re.findall(
+            r"```(?:json)?\s*(\{.*?\})\s*```",
+            raw_output,
+            flags=re.DOTALL,
+        )
+        candidates.extend(fenced)
+        start = raw_output.find("{")
+        end = raw_output.rfind("}")
+        if start != -1 and end > start:
+            candidates.append(raw_output[start : end + 1])
+        for candidate in candidates:
+            try:
+                data = json.loads(candidate)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                continue
+        return None
+
+    def _delta_to_operations(self, delta: Dict[str, Any]) -> List[MemoryOperation]:
+        operations: List[MemoryOperation] = []
+        for idx in delta.get("delete", []):
+            operations.append(
+                MemoryOperation(
+                    operation_type="delete",
+                    target=f"memory.index:{idx}",
+                    metadata={"indices": [idx]},
+                )
+            )
+        for text in delta.get("add", []):
+            operations.append(
+                MemoryOperation(
+                    operation_type="add",
+                    target="memory.bank",
+                    content=text,
+                    metadata={"source": "legacy_refine_command"},
+                )
+            )
+        for idx1, idx2 in delta.get("merge", []):
+            operations.append(
+                MemoryOperation(
+                    operation_type="merge",
+                    target=f"memory.index:{idx1},{idx2}",
+                    metadata={"indices": [idx1, idx2]},
+                )
+            )
+        for idx, tag in delta.get("relabel", []):
+            operations.append(
+                MemoryOperation(
+                    operation_type="relabel",
+                    target=f"memory.index:{idx}",
+                    content=tag,
+                    metadata={"indices": [idx], "new_tag": tag},
+                )
+            )
+        return operations
+
+    def _record_store_edit_trace(
+        self,
+        raw_cmd: str,
+        operations: List[MemoryOperation],
+        apply_result: Dict[str, Any],
+        iteration: int,
+    ) -> None:
+        trace_record = {
+            "timestamp": datetime.now().isoformat(),
+            "iteration": iteration,
+            "raw_command": raw_cmd,
+            "parsed_operations": [operation.to_dict() for operation in operations],
+            "operations": self._summarize_operation_results(apply_result),
+            "apply_result": apply_result,
+            "success": bool(
+                apply_result.get("success", True)
+                or apply_result.get("applied_operations")
+            ),
+            "error": None if apply_result.get("success", True) else "apply failed",
+        }
+        self.edit_traces.append(trace_record)
+        if len(self.edit_traces) > 100:
+            self.edit_traces.pop(0)
+
+    def _summarize_operation_results(
+        self, apply_result: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        summaries: List[Dict[str, Any]] = []
+        for item in apply_result.get("applied_operations", []):
+            operation = item.get("operation", {})
+            summaries.append(
+                {
+                    "type": operation.get("operation_type"),
+                    "status": item.get("status"),
+                    "detail": item.get("detail"),
+                }
+            )
+        for item in apply_result.get("skipped", []):
+            operation = item.get("operation", {})
+            summaries.append(
+                {
+                    "type": operation.get("operation_type"),
+                    "status": item.get("status"),
+                    "detail": item.get("detail"),
+                }
+            )
+        return summaries
+
     def _validate_refine_command(self, cmd: str) -> bool:
         """验证Refine命令格式"""
         if not cmd or not isinstance(cmd, str):
@@ -467,7 +929,14 @@ DELETE 1,3; ADD{{用户喜欢简洁的界面设计}}; MERGE 0&2; RELABEL 4 ui-pr
 
         return True
 
-    def _act(self, task_input: str, retrieved_text: str, traces: List[str]) -> str:
+    def _act(
+        self,
+        task_input: str,
+        retrieved_text: str,
+        traces: List[str],
+        role: Optional[MemoryRole] = None,
+        context: Optional[TaskContext] = None,
+    ) -> str:
         """执行Act动作（对外输出）"""
         # 验证输入参数
         if not task_input or not isinstance(task_input, str):
@@ -478,12 +947,22 @@ DELETE 1,3; ADD{{用户喜欢简洁的界面设计}}; MERGE 0&2; RELABEL 4 ui-pr
             logger.error("Act: traces参数必须是列表")
             return "Act: 内部错误 - traces参数无效"
 
+        role_prompt = role.system_prompt() if role is not None else ""
+        role_instructions = (
+            role.act_instructions(context) if role is not None and context is not None else ""
+        )
         # 构建详细的提示词
         prompt = f"""
 Act: 请给出最终答案或动作。
 
 当前任务:
 {task_input}
+
+角色提示:
+{role_prompt or "通用记忆演化角色"}
+
+角色输出要求:
+{role_instructions or "直接回应任务，并结合相关记忆。"}
 
 相关经验（来自记忆库）:
 {retrieved_text if retrieved_text else "无相关经验"}
@@ -816,7 +1295,10 @@ Act: [你的答案或动作]
 
     def get_statistics(self) -> Dict[str, Any]:
         """获取Agent统计信息"""
-        mem_stats = self.M.get_statistics()
+        if hasattr(self.memory_store, "get_statistics"):
+            mem_stats = self.memory_store.get_statistics()
+        else:
+            mem_stats = self.M.get_statistics()
         edit_stats = self.get_edit_statistics()
 
         return {
@@ -830,12 +1312,14 @@ Act: [你的答案或动作]
 
     def save_memory(self) -> bool:
         """保存记忆库"""
-        return self.persistence.save(self.M)
+        return self.memory_store.save()
 
     def load_memory(self) -> bool:
         """加载记忆库"""
         try:
-            self.M = self.persistence.load(self.M)
+            if isinstance(self.memory_store, JsonMemoryStore):
+                self.M = self.persistence.load(self.M)
+                self.memory_store.memory_bank = self.M
             return True
         except Exception as e:
             logger.error(f"加载记忆库失败: {e}")

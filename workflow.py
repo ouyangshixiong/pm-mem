@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import memory_manager
+from src.agent.remem_agent import ReMemAgent
+from src.agent.roles import RoleFactory
+from src.memory.schema import TaskContext
+from src.memory.stores import MarkdownLayerMemoryStore, MarkdownTraceStore
 
 
 DEFAULT_PROMPT_LAYERS = [
@@ -34,6 +38,11 @@ class ShortDramaWorkflow:
         self.roles_dir = Path(roles_dir)
         self.default_layers = default_layers or DEFAULT_PROMPT_LAYERS
         memory_manager.init_work_space()
+        self.agent = ReMemAgent(
+            llm=llm,
+            memory_store=MarkdownLayerMemoryStore(),
+            trace_store=MarkdownTraceStore(),
+        )
 
     def create_work(self, work_name: str) -> str:
         return memory_manager.create_work(work_name)
@@ -84,22 +93,29 @@ class ShortDramaWorkflow:
         role_name: str = "编剧",
         layer_id_list: Optional[List[str]] = None,
         update_memory: bool = True,
+        task_type: str = "generic_workflow_step",
     ) -> Dict[str, Any]:
-        prompt = self.build_prompt(work_id, task, role_name, layer_id_list)
-        output = self.llm(prompt)
-        memory_updated = False
-        if update_memory:
-            memory_updated = memory_manager.update_memory_from_llm_output(
-                work_id=work_id,
-                llm_output=output,
-                operator=role_name,
-            )
+        layers = layer_id_list or self.default_layers
+        role = RoleFactory.create(role_name, roles_dir=str(self.roles_dir))
+        context = TaskContext(
+            task_type=task_type,
+            source="short_drama_workflow",
+            role_id=role.role_id,
+            metadata={
+                "work_id": work_id,
+                "target_layers": layers,
+                "update_memory": update_memory,
+            },
+        )
+        result = self.agent.run_task(task, role=role, context=context)
+        output = result["action_output"]
         return {
             "work_id": work_id,
             "role_name": role_name,
-            "prompt": prompt,
+            "prompt": "",
             "output": output,
-            "memory_updated": memory_updated,
+            "memory_updated": result.get("memory_updated", False),
+            "remem_result": result,
         }
 
     def create_script_episode(self, work_id: str, episode_task: str) -> Dict[str, Any]:
@@ -107,6 +123,7 @@ class ShortDramaWorkflow:
             work_id=work_id,
             task=episode_task,
             role_name="编剧",
+            task_type="script_generation",
             layer_id_list=[
                 "work_metadata",
                 "core_setting",
@@ -121,6 +138,7 @@ class ShortDramaWorkflow:
             work_id=work_id,
             task=storyboard_task,
             role_name="分镜师",
+            task_type="storyboard_generation",
             layer_id_list=[
                 "core_setting",
                 "character_profile",
@@ -137,6 +155,7 @@ class ShortDramaWorkflow:
             role_name="一致性校验员",
             layer_id_list=DEFAULT_PROMPT_LAYERS,
             update_memory=False,
+            task_type="consistency_check",
         )
 
     def lock_layer(self, work_id: str, layer_id: str, locked: bool = True) -> bool:

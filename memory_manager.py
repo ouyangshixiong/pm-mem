@@ -314,6 +314,49 @@ def update_memory_from_llm_output(work_id: str, llm_output: str, operator: str) 
     return changed
 
 
+def get_work_traces(work_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """Return recent ReMem evolution traces for a work."""
+    trace_dir = _work_dir(work_id) / ".traces"
+    if not trace_dir.is_dir():
+        return []
+
+    traces = []
+    for path in sorted(trace_dir.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        traces.append(
+            {
+                "task_id": data.get("task_id", path.stem),
+                "trace_id": data.get("trace_id", data.get("task_id", path.stem)),
+                "status": data.get("status", ""),
+                "started_at": data.get("started_at", ""),
+                "finished_at": data.get("finished_at", ""),
+                "task_input": _summarize(data.get("task_input", ""), 120),
+                "role": data.get("role", {}),
+                "event_count": len(data.get("events", [])),
+                "result_summary": data.get("result_summary", {}),
+            }
+        )
+        if len(traces) >= limit:
+            break
+    return traces
+
+
+def get_work_trace(work_id: str, task_id: str) -> Dict[str, Any]:
+    """Read one ReMem evolution trace by task id."""
+    safe_task_id = Path(str(task_id)).name
+    if safe_task_id != str(task_id):
+        raise ValueError("invalid task_id")
+    if safe_task_id.endswith(".json"):
+        safe_task_id = safe_task_id[:-5]
+    trace_path = _work_dir(work_id) / ".traces" / f"{safe_task_id}.json"
+    if not trace_path.is_file():
+        raise FileNotFoundError(f"trace not found: {task_id}")
+    return json.loads(trace_path.read_text(encoding="utf-8"))
+
+
 def _works_dir() -> Path:
     env_path = os.getenv("PM_MEM_WORKS_DIR") or os.getenv("WORKS_DIR")
     if env_path:

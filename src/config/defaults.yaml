@@ -52,6 +52,6 @@ monitoring:
 
 # 测试配置
 testing:
-  use_mock_llm: true
+  use_mock_llm: false
   test_data_path: "./tests/data"
   coverage_target: 0.85

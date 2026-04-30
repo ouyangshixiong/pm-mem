@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import re
 
 import import_coordinator
 import memory_manager
@@ -43,12 +44,35 @@ def _payload(external_work_id="143"):
     }
 
 
-def _force_deterministic_fallback(monkeypatch):
+def _force_local_llm_success(monkeypatch):
+    def generate(self, prompt, images=None):
+        external_id = re.search(r"外部作品 ID：(.+)", prompt)
+        source_system = re.search(r"来源系统：(.+)", prompt)
+        external_id = external_id.group(1).strip() if external_id else "143"
+        source_system = source_system.group(1).strip() if source_system else "外部创作系统"
+        if "「作品元数据层」" in prompt:
+            return f"# 作品元数据\n\n来源系统：{source_system}\n来源workid：{external_id}"
+        if "「剧本档案层」" in prompt:
+            if "第2版剧本" in prompt:
+                return "# 剧本档案\n\n第2版剧本：林夏在会议室反击。"
+            return "# 剧本档案\n\n第1场 办公室 日。林夏：这份方案是我昨晚做的。"
+        if "「分镜档案层」" in prompt:
+            return "# 分镜档案\n\n镜头1：开放办公区全景。镜头2：林夏攥紧文件夹。"
+        return "# LLM处理结果\n\n已根据角色 prompt 提炼导入记忆。"
+
+    monkeypatch.setattr(
+        import_coordinator.LocalResponsesLLMClient,
+        "generate",
+        generate,
+    )
+
+
+def _force_all_llms_failure(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("PM_MEM_DEEPSEEK_API_KEY", raising=False)
 
     def fail_generate(self, prompt, images=None):
-        raise RuntimeError("test primary unavailable")
+        raise RuntimeError("test llm unavailable")
 
     monkeypatch.setattr(
         import_coordinator.LocalResponsesLLMClient,
@@ -64,7 +88,7 @@ def _force_deterministic_fallback(monkeypatch):
 
 def test_external_work_import_creates_visible_markdown_memory(tmp_path, monkeypatch):
     monkeypatch.setenv("PM_MEM_WORKS_DIR", str(tmp_path / "works"))
-    _force_deterministic_fallback(monkeypatch)
+    _force_local_llm_success(monkeypatch)
     client = TestClient(app)
 
     response = client.post("/api/import/external-work", json=_payload())
@@ -92,7 +116,7 @@ def test_external_work_import_creates_visible_markdown_memory(tmp_path, monkeypa
 
 def test_external_work_import_upserts_by_external_work_id(tmp_path, monkeypatch):
     monkeypatch.setenv("PM_MEM_WORKS_DIR", str(tmp_path / "works"))
-    _force_deterministic_fallback(monkeypatch)
+    _force_local_llm_success(monkeypatch)
     client = TestClient(app)
 
     first = client.post("/api/import/external-work", json=_payload()).json()
@@ -110,7 +134,7 @@ def test_external_work_import_upserts_by_external_work_id(tmp_path, monkeypatch)
 
 def test_external_work_import_dry_run_returns_drafts_without_writing(tmp_path, monkeypatch):
     monkeypatch.setenv("PM_MEM_WORKS_DIR", str(tmp_path / "works"))
-    _force_deterministic_fallback(monkeypatch)
+    _force_local_llm_success(monkeypatch)
     client = TestClient(app)
     payload = _payload("999")
     payload["dry_run"] = True
@@ -191,3 +215,17 @@ def test_external_work_import_uses_deepseek_backup_after_primary_failure(
     assert "DeepSeek备用处理结果" in script["content"]
     assert script["metadata"]["llm_provider"] == "deepseek_backup"
     assert script["metadata"]["llm_model"] == "deepseek-v4-pro"
+
+
+def test_external_work_import_returns_error_when_all_llms_fail(tmp_path, monkeypatch):
+    monkeypatch.setenv("PM_MEM_WORKS_DIR", str(tmp_path / "works"))
+    _force_all_llms_failure(monkeypatch)
+    client = TestClient(app)
+
+    response = client.post("/api/import/external-work", json=_payload("fail-1"))
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "local_proxy_responses" in detail
+    assert "deepseek_backup" in detail
+    assert memory_manager.list_works() == []

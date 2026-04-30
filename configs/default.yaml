@@ -38,7 +38,6 @@ deepseek_backup:
 
 # 导入流程中的角色 LLM 处理配置
 import_llm:
-  fallback_to_deterministic: true
   max_prompt_chars: 24000
 
 # 记忆库配置
@@ -89,7 +88,7 @@ monitoring:
 
 # 测试配置
 testing:
-  use_mock_llm: true
+  use_mock_llm: false
   test_data_path: "./tests/data"
   coverage_target: 0.85
 
@@ -116,7 +115,7 @@ advanced:
 environments:
   development:
     llm:
-      provider: "mock"  # 开发环境使用模拟LLM
+      provider: "deepseek"
     logging:
       level: "DEBUG"
     monitoring:
@@ -124,7 +123,7 @@ environments:
 
   testing:
     llm:
-      provider: "mock"
+      provider: "deepseek"
     logging:
       level: "INFO"
       file_path: "./logs/pm-mem-test.log"

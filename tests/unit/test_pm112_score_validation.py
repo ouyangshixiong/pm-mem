@@ -46,47 +46,34 @@ class TestPM112ScoreValidation:
             assert result == expected, f"评分解析失败: {score_value} -> {result}, 期望: {expected}"
 
     def test_invalid_score_handling(self):
-        """测试无效评分的处理"""
+        """测试无效评分会显式报错"""
         # 测试各种无效评分
         test_cases = [
-            # (评分值, 默认值, 期望结果)
-            (None, 0.5, 0.5),          # None值
-            ("", 0.3, 0.3),            # 空字符串
-            ("   ", 0.4, 0.4),         # 空白字符串
-            ("invalid", 0.5, 0.5),     # 无效字符串
-            ([1, 2], 0.5, 0.5),        # 列表类型
-            ({"key": "value"}, 0.5, 0.5),  # 字典类型
+            None,
+            "",
+            "   ",
+            "invalid",
+            [1, 2],
+            {"key": "value"},
         ]
 
-        for score_value, default, expected in test_cases:
+        for score_value in test_cases:
             item = {"relevance_score": score_value}
-            result = self.bank._validate_and_parse_score(item, "relevance_score", default)
-            assert result == expected, f"无效评分处理失败: {score_value} -> {result}, 期望: {expected}"
+            with pytest.raises(ValueError):
+                self.bank._validate_and_parse_score(item, "relevance_score")
 
     def test_score_range_validation(self):
-        """测试评分范围验证"""
+        """测试超出范围评分会显式报错"""
         # 测试超出范围的评分
-        test_cases = [
-            # (评分值, 期望结果)
-            (-0.1, 0.0),    # 轻微负分修正为0.0
-            (-1.0, 0.0),    # 严重负分修正为0.0
-            (1.1, 1.0),     # 轻微超分修正为1.0
-            (2.0, 1.0),     # 严重超分修正为1.0
-            (-0.5, 0.0),    # 负分修正为0.0
-        ]
-
-        for score_value, expected in test_cases:
+        for score_value in [-0.1, -1.0, 1.1, 2.0, -0.5]:
             item = {"relevance_score": score_value}
-            result = self.bank._validate_and_parse_score(item, "relevance_score")
-            assert result == expected, f"范围验证失败: {score_value} -> {result}, 期望: {expected}"
+            with pytest.raises(ValueError, match="超出有效范围"):
+                self.bank._validate_and_parse_score(item, "relevance_score")
 
     def test_edge_case_score_correction(self):
-        """测试边界情况评分修正"""
-        # 测试边界值的修正
+        """测试边界值精度处理"""
         test_cases = [
             # (评分值, 期望结果)
-            (-0.001, 0.0),   # 轻微负分修正为0.0
-            (1.001, 1.0),    # 轻微超分修正为1.0
             (-0.0, 0.0),     # 负零
             (0.9999, 1.0),   # 四舍五入到1.0
             (0.0001, 0.0),   # 四舍五入到0.0
@@ -95,7 +82,7 @@ class TestPM112ScoreValidation:
         for score_value, expected in test_cases:
             item = {"relevance_score": score_value}
             result = self.bank._validate_and_parse_score(item, "relevance_score")
-            assert abs(result - expected) < 0.01, f"边界修正失败: {score_value} -> {result}, 期望: {expected}"
+            assert abs(result - expected) < 0.01, f"边界精度处理失败: {score_value} -> {result}, 期望: {expected}"
 
     def test_multiple_score_dimensions(self):
         """测试多维度评分解析"""
@@ -120,20 +107,15 @@ class TestPM112ScoreValidation:
         assert time == 0.7
 
     def test_missing_score_field(self):
-        """测试缺失评分字段的处理"""
+        """测试缺失评分字段会显式报错"""
         item = {
             "semantic_relevance": 0.9,
             "task_applicability": 0.8,
             # 缺少relevance_score
         }
 
-        # 使用默认值
-        result = self.bank._validate_and_parse_score(item, "relevance_score", 0.5)
-        assert result == 0.5
-
-        # 使用不同的默认值
-        result = self.bank._validate_and_parse_score(item, "relevance_score", 0.3)
-        assert result == 0.3
+        with pytest.raises(ValueError, match="缺少'relevance_score'"):
+            self.bank._validate_and_parse_score(item, "relevance_score", 0.5)
 
     def test_score_precision(self):
         """测试评分精度处理"""
@@ -192,20 +174,15 @@ class TestPM112ScoreValidation:
         assert result == 0.5
 
     def test_invalid_default_value(self):
-        """测试无效默认值的处理"""
+        """测试默认值不再用于修复坏评分"""
         item = {"relevance_score": "invalid"}
 
-        # 测试无效默认值（超出范围）
-        result = self.bank._validate_and_parse_score(item, "relevance_score", 1.5)
-        assert result == 0.5  # 应该修正为0.5
-
-        # 测试无效默认值（负值）
-        result = self.bank._validate_and_parse_score(item, "relevance_score", -0.5)
-        assert result == 0.5  # 应该修正为0.5
-
-        # 测试无效默认值（非数字）
-        result = self.bank._validate_and_parse_score(item, "relevance_score", "invalid")
-        assert result == 0.5  # 应该修正为0.5
+        with pytest.raises(ValueError):
+            self.bank._validate_and_parse_score(item, "relevance_score", 1.5)
+        with pytest.raises(ValueError):
+            self.bank._validate_and_parse_score(item, "relevance_score", -0.5)
+        with pytest.raises(ValueError):
+            self.bank._validate_and_parse_score(item, "relevance_score", "invalid")
 
     def test_parameter_validation(self):
         """测试参数验证"""
@@ -261,8 +238,7 @@ class TestPM112ScoreValidation:
         assert results[1].relevance_score == 0.65
 
     def test_error_recovery(self):
-        """测试错误恢复机制"""
-        # 测试部分评分无效的情况
+        """测试部分评分无效时不再恢复"""
         item = {
             "relevance_score": 0.85,
             "semantic_relevance": "invalid",  # 无效评分
@@ -270,16 +246,15 @@ class TestPM112ScoreValidation:
             "timeliness": None  # None值
         }
 
-        # 应该能成功解析有效评分，无效评分使用默认值
         relevance = self.bank._validate_and_parse_score(item, "relevance_score")
-        semantic = self.bank._validate_and_parse_score(item, "semantic_relevance", 0.0)
         task = self.bank._validate_and_parse_score(item, "task_applicability", 0.0)
-        time = self.bank._validate_and_parse_score(item, "timeliness", 0.0)
 
         assert relevance == 0.85
-        assert semantic == 0.0  # 使用默认值
         assert task == 0.8
-        assert time == 0.0  # 使用默认值
+        with pytest.raises(ValueError):
+            self.bank._validate_and_parse_score(item, "semantic_relevance", 0.0)
+        with pytest.raises(ValueError):
+            self.bank._validate_and_parse_score(item, "timeliness", 0.0)
 
     def test_performance_with_large_dataset(self):
         """测试大数据集下的性能"""
@@ -313,17 +288,14 @@ class TestPM112ScoreValidation:
 
     def test_backward_compatibility(self):
         """测试向后兼容性"""
-        # 确保原有功能仍然工作
         item = {"relevance_score": 0.75}
 
-        # 原有调用方式应该仍然工作
         result = self.bank._validate_and_parse_score(item, "relevance_score")
         assert result == 0.75
 
-        # 原有默认值应该仍然工作
         item2 = {}
-        result = self.bank._validate_and_parse_score(item2, "relevance_score", 0.5)
-        assert result == 0.5
+        with pytest.raises(ValueError):
+            self.bank._validate_and_parse_score(item2, "relevance_score", 0.5)
 
     def test_logging_behavior(self):
         """测试日志记录行为"""
@@ -355,10 +327,11 @@ class TestPM112ScoreValidation:
 
             # 测试错误情况下的日志
             item2 = {"relevance_score": "invalid"}
-            self.bank._validate_and_parse_score(item2, "relevance_score")
+            with pytest.raises(ValueError):
+                self.bank._validate_and_parse_score(item2, "relevance_score")
 
             logs = log_capture.getvalue()
-            assert "无法将" in logs or "invalid" in logs or "使用默认值" in logs
+            assert logs == "" or "invalid" in logs
 
         finally:
             # 恢复原始handlers

@@ -81,7 +81,6 @@ class RetrievalRequest(BaseModel):
     max_chunk_chars: int = DEFAULT_MAX_CHUNK_CHARS
     max_result_chars: int = DEFAULT_MAX_RESULT_CHARS
     min_score: float = 0.0
-    fallback_to_text_score: bool = False
 
 
 class DeepSeekApiKeyUpdateRequest(BaseModel):
@@ -460,7 +459,6 @@ def _run_retrieval(work_id: str, payload: RetrievalRequest) -> Dict[str, Any]:
         answer_instructions=payload.answer_instructions,
         max_chunk_chars=payload.max_chunk_chars,
         min_score=payload.min_score,
-        fallback_to_text_score=payload.fallback_to_text_score,
     )
     data = result.to_dict(
         include_content=payload.include_content,
@@ -858,7 +856,7 @@ function renderLlmConfig(config) {
     <div class="col-md-4"><div class="text-secondary small">Primary Model</div><div class="mono">${escapeHtml(primary.model)}</div></div>
     <div class="col-md-4"><div class="text-secondary small">DeepSeek Backup</div><div>${backup.api_key_configured ? '已配置' : '未配置 API Key'}</div><div class="mono small">${escapeHtml(backup.model || '')}</div></div>
     <div class="col-md-8"><div class="text-secondary small">DeepSeek Endpoint</div><div class="mono">${escapeHtml(backup.endpoint || '')}</div></div>
-    <div class="col-md-4"><div class="text-secondary small">Fallback</div><div>${config.fallback_to_deterministic ? '两路失败后保留确定性草稿' : '两路失败即中断'}</div></div>
+    <div class="col-md-4"><div class="text-secondary small">Fallback</div><div>两路失败即中断</div></div>
   `;
 }
 async function saveDeepSeekApiKey() {

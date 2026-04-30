@@ -6,6 +6,7 @@ import pytest
 import sys
 import os
 import tempfile
+import json
 
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
@@ -21,6 +22,15 @@ class TestReMemAgent:
     def setup_method(self):
         """测试设置"""
         self.mock_llm = MockLLM()
+        retrieval_response = json.dumps({
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "explanation": "相关"},
+            ]
+        })
+        self.mock_llm.responses = {
+            "记忆检索评估任务": retrieval_response,
+            **self.mock_llm.responses,
+        }
         # 使用临时文件路径避免测试间污染
         self.temp_file = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
         self.temp_file.close()
@@ -136,7 +146,12 @@ class TestReMemAgent:
         self.agent.M.add(MemoryEntry("相关任务2", "输出3", "反馈3", "相关标签"))
 
         # 配置模拟LLM返回相关索引
-        self.mock_llm.responses["请仅输出索引列表"] = "0,2"
+        self.mock_llm.responses["记忆检索评估任务"] = json.dumps({
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "explanation": "相关"},
+                {"index": 2, "relevance_score": 0.8, "explanation": "相关"},
+            ]
+        })
         self.mock_llm.responses["请选择动作"] = "act"
 
         task_input = "相关任务"

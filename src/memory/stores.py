@@ -83,16 +83,13 @@ class JsonMemoryStore(MemoryStore):
             return []
 
         if self.llm is None:
-            raw_results = self.memory_bank._fallback_retrieval(
-                query, k, self.include_explanations
-            )
-        else:
-            raw_results = self.memory_bank.retrieve(
-                self.llm,
-                query,
-                k=k,
-                include_explanations=self.include_explanations,
-            )
+            raise RuntimeError("LLM is required for memory retrieval")
+        raw_results = self.memory_bank.retrieve(
+            self.llm,
+            query,
+            k=k,
+            include_explanations=self.include_explanations,
+        )
         return [self._record_from_retrieval(item) for item in raw_results]
 
     def apply_operations(
@@ -307,66 +304,39 @@ class MarkdownLayerMemoryStore(MemoryStore):
         work_id = _work_id(context)
         self._last_work_id = work_id
         layer_ids = self._target_layers(context, role)
-        if context.metadata.get("retrieval_mode") == "llm":
-            if self.llm is None:
-                raise RuntimeError("LLM retrieval requires a configured llm")
-            run = LLMWorkRetriever(self.llm).retrieve(
-                work_id=work_id,
-                query=query,
-                layer_ids=layer_ids,
-                top_k=k,
-                include_answer=False,
-                fallback_to_text_score=bool(
-                    context.metadata.get("fallback_to_text_score", False)
+        if context.metadata.get("skip_retrieval") is True:
+            return []
+        if self.llm is None:
+            raise RuntimeError("LLM retrieval requires a configured llm")
+        run = LLMWorkRetriever(self.llm).retrieve(
+            work_id=work_id,
+            query=query,
+            layer_ids=layer_ids,
+            top_k=k,
+            include_answer=False,
+        )
+        return [
+            MemoryRecord(
+                id=hit.chunk.chunk_id,
+                content=(
+                    f"## {hit.chunk.layer_name}\n"
+                    f"### {' / '.join(hit.chunk.heading_path) or '无标题'}\n"
+                    f"{hit.chunk.content}"
                 ),
+                metadata={
+                    "work_id": work_id,
+                    "layer_id": hit.chunk.layer_id,
+                    "layer_name": hit.chunk.layer_name,
+                    "layer_file": hit.chunk.layer_file,
+                    "heading_path": list(hit.chunk.heading_path),
+                    "reason": hit.reason,
+                    "matched_facts": list(hit.matched_facts),
+                    "retrieval_mode": "llm",
+                },
+                score=hit.score,
             )
-            return [
-                MemoryRecord(
-                    id=hit.chunk.chunk_id,
-                    content=(
-                        f"## {hit.chunk.layer_name}\n"
-                        f"### {' / '.join(hit.chunk.heading_path) or '无标题'}\n"
-                        f"{hit.chunk.content}"
-                    ),
-                    metadata={
-                        "work_id": work_id,
-                        "layer_id": hit.chunk.layer_id,
-                        "layer_name": hit.chunk.layer_name,
-                        "layer_file": hit.chunk.layer_file,
-                        "heading_path": list(hit.chunk.heading_path),
-                        "reason": hit.reason,
-                        "matched_facts": list(hit.matched_facts),
-                        "retrieval_mode": "llm",
-                    },
-                    score=hit.score,
-                )
-                for hit in run.hits
-            ]
-        records: List[MemoryRecord] = []
-        for layer_id in layer_ids:
-            try:
-                layer = memory_manager.get_layer_content(work_id, layer_id)
-            except Exception as exc:
-                logger.warning("failed to read layer %s: %s", layer_id, exc)
-                continue
-            content = layer.get("content") or "（暂无内容）"
-            score = _simple_text_score(query, content)
-            records.append(
-                MemoryRecord(
-                    id=f"{work_id}:{layer_id}",
-                    content=f"## {layer['layer_name']}\n{content}",
-                    metadata={
-                        "work_id": work_id,
-                        "layer_id": layer_id,
-                        "layer_name": layer["layer_name"],
-                        "layer_file": layer["layer_file"],
-                        "locked": bool(layer.get("locked")),
-                    },
-                    score=score,
-                )
-            )
-        records.sort(key=lambda item: item.score or 0.0, reverse=True)
-        return records[: max(k, 0)] if k > 0 else []
+            for hit in run.hits
+        ]
 
     def apply_operations(
         self, operations: List[MemoryOperation], context, role
@@ -829,15 +799,6 @@ def _work_trace_dir(work_id: str) -> Path:
     if memory_manager is not None and hasattr(memory_manager, "_work_dir"):
         return memory_manager._work_dir(work_id) / ".traces"
     return Path("works") / work_id / ".traces"
-
-
-def _simple_text_score(query: str, content: str) -> float:
-    query_terms = {term for term in re.split(r"\s+", query.lower()) if term}
-    if not query_terms:
-        return 0.5
-    content_lower = content.lower()
-    hits = sum(1 for term in query_terms if term in content_lower)
-    return round(min(1.0, 0.2 + hits / max(len(query_terms), 1)), 2)
 
 
 def _extract_json_memory_updates(text: str) -> List[Dict[str, Any]]:

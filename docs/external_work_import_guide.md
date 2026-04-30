@@ -86,7 +86,7 @@ POST http://localhost:8000/api/import/external-work
 
 ## 4. 导入模型配置
 
-默认导入流程固定调用 local proxy OpenAI Responses 兼容接口；如果 local proxy 请求失败或返回空文本，则自动使用 DeepSeek `chat/completions` 作为备用通道。两路都失败时，如果 `fallback_to_deterministic: true`，pm-mem 会保留确定性草稿并在 front matter 中记录错误，方便 Web 管理页显示和人工审核。
+默认导入流程固定调用 local proxy OpenAI Responses 兼容接口；如果 local proxy 请求失败或返回空文本，则自动使用 DeepSeek `chat/completions` 作为备用通道。两路都失败时，接口直接返回错误信息，不写入作品记忆，也不会保留确定性草稿。
 
 ```yaml
 local_llm:
@@ -105,7 +105,6 @@ deepseek_backup:
   reasoning_effort: "high"
 
 import_llm:
-  fallback_to_deterministic: true
   max_prompt_chars: 24000
 ```
 

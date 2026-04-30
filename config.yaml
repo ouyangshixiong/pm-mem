@@ -22,7 +22,6 @@ deepseek_backup:
   reasoning_effort: "high"
 
 import_llm:
-  fallback_to_deterministic: true
   max_prompt_chars: 24000
 
 short_drama:

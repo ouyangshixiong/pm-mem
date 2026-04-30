@@ -45,7 +45,6 @@ class TestLLMFactory(unittest.TestCase):
             "timeout": 10,
             "max_retries": 2,
             "connection_pool_size": 3,
-            "enable_mock_fallback": True,
         }
 
         # 创建工厂实例
@@ -67,7 +66,6 @@ class TestLLMFactory(unittest.TestCase):
         self.assertEqual(self.factory.config["timeout"], 10)
         self.assertEqual(self.factory.config["max_retries"], 2)
         self.assertEqual(self.factory.config["connection_pool_size"], 3)
-        self.assertTrue(self.factory.config["enable_mock_fallback"])
 
     def test_create_mock_llm(self):
         """测试创建模拟LLM"""
@@ -132,10 +130,8 @@ class TestLLMFactory(unittest.TestCase):
         # 模拟无API密钥
         mock_get_api_key.return_value = None
 
-        # 应该降级到模拟LLM
-        llm = self.factory.create_llm(provider="deepseek", environment="production")
-
-        self.assertIsInstance(llm, MockLLM)
+        with self.assertRaises(ValueError):
+            self.factory.create_llm(provider="deepseek", environment="production")
         mock_get_api_key.assert_called_once_with("deepseek", "production")
 
     def test_instance_caching(self):
@@ -169,9 +165,9 @@ class TestLLMFactory(unittest.TestCase):
         adapter_deepseek = self.factory.create_adapter(use_mock=False)
         self.assertFalse(adapter_deepseek.use_mock)
 
-        # 测试自动判断（测试环境应该使用模拟）
+        # 自动模式不再按测试/开发环境切到 mock；真实模式缺配置应显式失败
         adapter_auto = self.factory.create_adapter(use_mock=None)
-        self.assertTrue(adapter_auto.use_mock)  # 测试环境应该使用模拟
+        self.assertFalse(adapter_auto.use_mock)
 
     def test_get_default_llm(self):
         """测试获取默认LLM"""
@@ -277,15 +273,15 @@ class TestLLMFactory(unittest.TestCase):
 
     def test_environment_auto_detection(self):
         """测试环境自动检测"""
-        # 测试环境应该使用模拟
+        # 自动模式不再因环境隐式使用 Mock
         test_factory = LLMFactory(config={"environment": "testing"})
         adapter_test = test_factory.create_adapter(use_mock=None)
-        self.assertTrue(adapter_test.use_mock)
+        self.assertFalse(adapter_test.use_mock)
 
-        # 开发环境应该使用模拟
+        # 开发环境也不隐式使用 Mock
         dev_factory = LLMFactory(config={"environment": "development"})
         adapter_dev = dev_factory.create_adapter(use_mock=None)
-        self.assertTrue(adapter_dev.use_mock)
+        self.assertFalse(adapter_dev.use_mock)
 
         # 生产环境应该使用真实LLM
         prod_factory = LLMFactory(config={"environment": "production"})

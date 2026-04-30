@@ -136,7 +136,6 @@ class LLMWorkRetriever:
         answer_instructions: str = "",
         max_chunk_chars: int = DEFAULT_MAX_CHUNK_CHARS,
         min_score: float = 0.0,
-        fallback_to_text_score: bool = False,
     ) -> RetrievalRun:
         """Run LLM retrieval over selected work layers.
 
@@ -168,8 +167,7 @@ class LLMWorkRetriever:
                 message = f"LLM retrieval batch failed: {exc}"
                 logger.warning(message)
                 errors.append(message)
-                if fallback_to_text_score:
-                    scored_hits.extend(self._fallback_score(query, batch))
+                raise RuntimeError(message) from exc
 
         deduped = self._dedupe_hits(scored_hits)
         filtered = [hit for hit in deduped if hit.score >= min_score]
@@ -186,8 +184,9 @@ class LLMWorkRetriever:
                     answer_instructions=answer_instructions,
                 )
             except Exception as exc:
-                answer_error = str(exc)
-                logger.warning("LLM answer generation failed: %s", exc)
+                message = f"LLM answer generation failed: {exc}"
+                logger.warning(message)
+                raise RuntimeError(message) from exc
 
         return RetrievalRun(
             work_id=work_id,
@@ -207,7 +206,6 @@ class LLMWorkRetriever:
                 "max_chunk_chars": max_chunk_chars,
                 "max_prompt_chars": self.max_prompt_chars,
                 "retrieval_mode": "llm",
-                "fallback_to_text_score": fallback_to_text_score,
             },
             errors=errors,
         )
@@ -287,14 +285,22 @@ class LLMWorkRetriever:
         hits: List[RetrievalHit] = []
         for item in data["results"]:
             if not isinstance(item, dict):
-                continue
+                raise ValueError(f"LLM result item must be an object: {item!r}")
+            if "index" not in item:
+                raise ValueError(f"LLM result item missing index: {item!r}")
             try:
                 local_index = int(item.get("index"))
-            except Exception:
-                continue
+            except Exception as exc:
+                raise ValueError(f"LLM result item has invalid index: {item!r}") from exc
             if local_index < 0 or local_index >= len(batch):
-                continue
-            score = _parse_score(item.get("relevance_score", item.get("score", 0.0)))
+                raise ValueError(f"LLM result index out of range: {local_index}")
+            if "relevance_score" in item:
+                raw_score = item["relevance_score"]
+            elif "score" in item:
+                raw_score = item["score"]
+            else:
+                raise ValueError(f"LLM result item missing relevance_score: {item!r}")
+            score = _parse_score(raw_score)
             reason = str(item.get("reason") or item.get("explanation") or "").strip()
             matched_facts = item.get("matched_facts") or item.get("facts") or []
             if isinstance(matched_facts, str):
@@ -346,16 +352,6 @@ class LLMWorkRetriever:
 请直接输出最终答案，不要输出检索过程，不要编造检索片段中没有的事实。
 """
         return _strip_act_prefix(str(self.llm(prompt)).strip())
-
-    def _fallback_score(self, query: str, batch: List[RetrievalChunk]) -> List[RetrievalHit]:
-        return [
-            RetrievalHit(
-                chunk=chunk,
-                score=_simple_text_score(query, chunk.content),
-                reason="LLM检索失败后的文本匹配回退结果",
-            )
-            for chunk in batch
-        ]
 
     def _dedupe_hits(self, hits: List[RetrievalHit]) -> List[RetrievalHit]:
         by_chunk: Dict[str, RetrievalHit] = {}
@@ -506,22 +502,11 @@ def _parse_json_object(raw: Any) -> Optional[Dict[str, Any]]:
 def _parse_score(value: Any) -> float:
     try:
         score = float(value)
-    except Exception:
-        score = 0.0
-    return round(max(0.0, min(1.0, score)), 2)
-
-
-def _simple_text_score(query: str, text: str) -> float:
-    query_terms = _tokenize(query)
-    text_terms = set(_tokenize(text))
-    if not query_terms or not text_terms:
-        return 0.0
-    overlap = sum(1 for term in query_terms if term in text_terms)
-    return round(min(1.0, overlap / max(len(set(query_terms)), 1)), 2)
-
-
-def _tokenize(value: str) -> List[str]:
-    return re.findall(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", str(value).lower())
+    except Exception as exc:
+        raise ValueError(f"invalid relevance score: {value!r}") from exc
+    if not (0.0 <= score <= 1.0):
+        raise ValueError(f"relevance score out of range [0.0, 1.0]: {score}")
+    return round(score, 2)
 
 
 def _chunk_id(work_id: str, layer_id: str, index: int, content: str) -> str:

@@ -1,7 +1,7 @@
 """
 MockLLM适配器使用示例
 
-演示如何通过适配器模式在测试和生产环境之间无缝切换。
+演示如何在测试中显式使用 MockLLM，并在真实调用中切换到 DeepSeek。
 """
 
 import sys
@@ -82,7 +82,7 @@ def example_mock_llm_adapter():
     print("示例3：MockLLM适配器使用")
     print("=" * 60)
 
-    # 创建适配器（默认使用MockLLM）
+    # 测试场景中显式启用 MockLLM
     adapter = MockLLMAdapter(
         use_mock=True,
         mock_config={

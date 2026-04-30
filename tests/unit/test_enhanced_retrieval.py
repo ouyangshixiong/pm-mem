@@ -132,7 +132,7 @@ class TestEnhancedRetrieval:
         class MockLLM:
             def __call__(self, prompt):
                 # 验证提示词包含改进的内容
-                assert "评估每个记忆条目与查询的相关性" in prompt
+                assert "评估记忆条目与用户查询的相关性" in prompt
                 assert "语义相关性" in prompt
                 assert "任务适用性" in prompt
                 assert "时效性" in prompt
@@ -193,41 +193,27 @@ class TestEnhancedRetrieval:
             assert isinstance(result, MemoryEntry)
             assert not isinstance(result, RetrievalResult)
 
-    def test_fallback_retrieval(self):
-        """测试回退检索机制"""
+    def test_llm_failure_raises(self):
+        """测试LLM失败时显式抛错"""
         class FailingLLM:
             def __call__(self, prompt):
                 raise Exception("LLM调用失败")
 
         failing_llm = FailingLLM()
 
-        # LLM失败时应该使用回退机制
-        results = self.bank.retrieve(failing_llm, "测试查询", k=3, include_explanations=True)
-
-        # 应该返回结果
-        assert len(results) == 3
-
-        # 回退结果应该是RetrievalResult对象
-        for result in results:
-            assert isinstance(result, RetrievalResult)
-            assert result.relevance_score == 0.5  # 回退默认评分
-            assert result.explanation == "回退检索：按时间顺序返回"
+        with pytest.raises(Exception, match="LLM调用失败"):
+            self.bank.retrieve(failing_llm, "测试查询", k=3, include_explanations=True)
 
     def test_json_parsing_error_handling(self):
-        """测试JSON解析错误处理"""
+        """测试JSON解析错误会显式抛错"""
         class InvalidJSONLLM:
             def __call__(self, prompt):
                 return "这不是有效的JSON"
 
         invalid_llm = InvalidJSONLLM()
 
-        # JSON解析失败时应该使用回退机制
-        results = self.bank.retrieve(invalid_llm, "测试查询", k=2, include_explanations=True)
-
-        # 应该返回回退结果
-        assert len(results) == 2
-        for result in results:
-            assert isinstance(result, RetrievalResult)
+        with pytest.raises(RuntimeError, match="not valid JSON"):
+            self.bank.retrieve(invalid_llm, "测试查询", k=2, include_explanations=True)
 
     def test_retrieval_result_dataclass(self):
         """测试RetrievalResult数据结构"""

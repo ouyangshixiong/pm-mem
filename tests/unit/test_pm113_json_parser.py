@@ -406,15 +406,14 @@ class TestPM113JsonParser:
         # 重置mock
         mock_llm.reset_mock()
 
-        # 测试3: 无效JSON响应（应该触发回退检索）
+        # 测试3: 无效JSON响应应该显式失败
         mock_llm.return_value = "无效的JSON响应"
 
-        results = self.bank.retrieve(mock_llm, "测试查询", k=2)
-        # 回退检索应该返回结果
-        assert len(results) > 0
+        with pytest.raises(RuntimeError, match="not valid JSON"):
+            self.bank.retrieve(mock_llm, "测试查询", k=2)
 
     def test_fallback_mechanism_trigger(self):
-        """测试回退机制的触发"""
+        """测试坏JSON不会触发回退机制"""
         # 创建测试记忆条目
         for i in range(5):
             entry = MemoryEntry(f"任务{i}", f"输出{i}", f"反馈{i}", f"tag{i}")
@@ -424,15 +423,12 @@ class TestPM113JsonParser:
         mock_llm = Mock()
         mock_llm.return_value = "这不是有效的JSON"
 
-        # 执行检索
-        results = self.bank.retrieve(mock_llm, "测试查询", k=3)
-
-        # 验证回退机制被触发
-        assert len(results) == 3  # 回退检索应该返回k个结果
+        with pytest.raises(RuntimeError, match="not valid JSON"):
+            self.bank.retrieve(mock_llm, "测试查询", k=3)
 
         # 验证日志记录
         logs = self.log_capture.getvalue()
-        assert "JSON解析失败" in logs or "使用回退检索" in logs
+        assert "JSON解析失败" in logs or "无法解析JSON响应" in logs
 
     def test_edge_cases(self):
         """测试边界情况"""

@@ -1,7 +1,7 @@
 """
 模拟LLM用于测试
 
-提供与DeepSeek API完全兼容的模拟LLM接口，支持适配器模式无缝切换。
+提供与DeepSeek API兼容的测试用模拟LLM接口。
 """
 
 import re
@@ -18,8 +18,8 @@ class MockLLM(LLMClientBase):
     """
     模拟LLM，用于测试和开发
 
-    与DeepSeekClient完全兼容，支持相同的参数和方法。
-    支持适配器模式，可在测试和生产环境之间无缝切换。
+    与DeepSeekClient兼容，支持相同的参数和方法。
+    仅应在测试或本地实验中显式启用。
     """
 
     def __init__(
@@ -411,18 +411,18 @@ class DeterministicMockLLM(MockLLM):
 
 class MockLLMAdapter:
     """
-    MockLLM适配器，支持无缝切换
+    MockLLM适配器。
 
-    允许在测试和生产环境之间切换，无需修改调用代码。
+    Mock 只能通过 use_mock=True 显式启用；真实 DeepSeek 模式必须提供 API 密钥。
     """
 
-    def __init__(self, use_mock: bool = True, mock_config: Optional[Dict] = None,
+    def __init__(self, use_mock: bool = False, mock_config: Optional[Dict] = None,
                  deepseek_config: Optional[Dict] = None):
         """
         初始化适配器
 
         Args:
-            use_mock: 是否使用MockLLM（True=测试环境，False=生产环境）
+            use_mock: 是否使用MockLLM（True=测试环境显式启用，False=真实DeepSeek）
             mock_config: MockLLM配置参数
             deepseek_config: DeepSeekClient配置参数
         """
@@ -446,10 +446,11 @@ class MockLLMAdapter:
             # 创建DeepSeekClient实例
             try:
                 from .deepseek_client import DeepSeekClient
-                # 为测试环境提供默认API密钥
                 config = self.deepseek_config.copy()
-                if "api_key" not in config:
-                    config["api_key"] = "test-api-key-for-mock"
+                if not config.get("api_key"):
+                    raise ValueError(
+                        "DeepSeek API key is required when MockLLMAdapter uses real DeepSeek"
+                    )
                 return DeepSeekClient(**config)
             except ImportError:
                 raise ImportError("无法导入DeepSeekClient，请确保已安装openai包")

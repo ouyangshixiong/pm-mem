@@ -60,7 +60,6 @@ class ImportLLMSettings:
     stream: bool = True
     max_output_tokens: Optional[int] = None
     temperature: Optional[float] = None
-    fallback_to_deterministic: bool = True
     max_prompt_chars: int = 24000
     deepseek_backup: DeepSeekBackupSettings = field(
         default_factory=DeepSeekBackupSettings
@@ -75,7 +74,6 @@ class ImportLLMSettings:
             "timeout": self.timeout,
             "max_output_tokens": self.max_output_tokens,
             "temperature": self.temperature,
-            "fallback_to_deterministic": self.fallback_to_deterministic,
             "max_prompt_chars": self.max_prompt_chars,
             "api_key_configured": bool(self.api_key),
             "stream": self.stream,
@@ -205,8 +203,8 @@ class DeepSeekChatLLMClient:
 def load_import_llm_settings() -> ImportLLMSettings:
     """Load import LLM settings from YAML config and environment variables."""
     config = _load_project_config()
-    import_llm = _as_dict(config.get("import_llm"))
     local_llm = _as_dict(config.get("local_llm"))
+    import_llm = _as_dict(config.get("import_llm"))
     deepseek_backup = _load_deepseek_backup_config(config)
 
     settings = ImportLLMSettings(
@@ -217,10 +215,6 @@ def load_import_llm_settings() -> ImportLLMSettings:
         stream=_as_bool(local_llm.get("stream"), True),
         max_output_tokens=_as_optional_int(local_llm.get("max_output_tokens")),
         temperature=_as_optional_float(local_llm.get("temperature")),
-        fallback_to_deterministic=_as_bool(
-            import_llm.get("fallback_to_deterministic"),
-            True,
-        ),
         max_prompt_chars=_as_int(import_llm.get("max_prompt_chars"), 24000),
         deepseek_backup=deepseek_backup,
     )
@@ -313,11 +307,6 @@ def _merge_dicts(base: Dict[str, Any], overlay: Dict[str, Any]) -> None:
 
 
 def _apply_env_overrides(settings: ImportLLMSettings) -> None:
-    if "PM_MEM_IMPORT_LLM_FALLBACK" in os.environ:
-        settings.fallback_to_deterministic = _as_bool(
-            os.environ["PM_MEM_IMPORT_LLM_FALLBACK"],
-            settings.fallback_to_deterministic,
-        )
     if "PM_MEM_IMPORT_LLM_MAX_PROMPT_CHARS" in os.environ:
         settings.max_prompt_chars = _as_int(
             os.environ["PM_MEM_IMPORT_LLM_MAX_PROMPT_CHARS"],

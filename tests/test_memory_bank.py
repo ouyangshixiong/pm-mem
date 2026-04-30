@@ -422,6 +422,13 @@ class TestMemoryBank(unittest.TestCase):
         self.assertEqual(len(results), 0)
 
         # k大于记忆库大小
+        mock_llm.return_value = json.dumps({
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "explanation": "相关"},
+                {"index": 1, "relevance_score": 0.8, "explanation": "相关"},
+                {"index": 2, "relevance_score": 0.7, "explanation": "相关"},
+            ]
+        })
         results = self.bank.retrieve(mock_llm, "查询", k=10)
         self.assertEqual(len(results), 3)
 

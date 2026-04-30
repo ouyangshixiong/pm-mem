@@ -479,32 +479,50 @@ class MemoryBank:
             # PM-113: 使用健壮的JSON解析方法
             result_data = self._parse_json_response(result_text)
             if result_data is None:
-                # JSON解析失败，使用回退检索
-                logger.warning("JSON解析失败，使用回退检索")
-                return self._fallback_retrieval(query, k, include_explanations)
+                raise RuntimeError("LLM retrieval response is not valid JSON")
+            if not isinstance(result_data, dict):
+                raise RuntimeError("LLM retrieval response must be a JSON object")
 
             if "results" not in result_data:
-                logger.error("响应中缺少'results'字段")
-                return self._fallback_retrieval(query, k, include_explanations)
+                raise RuntimeError("LLM retrieval response missing 'results' field")
+
+            raw_results = result_data.get("results")
+            if not isinstance(raw_results, list):
+                raise RuntimeError("LLM retrieval response field 'results' must be a list")
 
             # 提取评估结果
             evaluations = []
-            for item in result_data["results"]:
-                if "index" not in item or "relevance_score" not in item:
-                    logger.warning(f"跳过无效的评估项: {item}")
-                    continue
+            for item in raw_results:
+                if not isinstance(item, dict):
+                    raise RuntimeError(f"LLM retrieval result item must be an object: {item!r}")
+                if "index" not in item:
+                    raise RuntimeError(f"LLM retrieval result missing 'index': {item!r}")
+                if "relevance_score" not in item:
+                    raise RuntimeError(f"LLM retrieval result missing 'relevance_score': {item!r}")
 
-                idx = item["index"]
-
-                # PM-112: 多维度评分解析和验证
                 try:
-                    score = self._validate_and_parse_score(item, "relevance_score")
-                    semantic_relevance = self._validate_and_parse_score(item, "semantic_relevance", 0.0)
-                    task_applicability = self._validate_and_parse_score(item, "task_applicability", 0.0)
-                    timeliness = self._validate_and_parse_score(item, "timeliness", 0.0)
-                except ValueError as e:
-                    logger.warning(f"评分验证失败: {e}")
-                    continue
+                    idx = int(item["index"])
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"LLM retrieval result has invalid index: {item!r}"
+                    ) from exc
+
+                score = self._validate_and_parse_score(item, "relevance_score")
+                semantic_relevance = (
+                    self._validate_and_parse_score(item, "semantic_relevance")
+                    if "semantic_relevance" in item
+                    else None
+                )
+                task_applicability = (
+                    self._validate_and_parse_score(item, "task_applicability")
+                    if "task_applicability" in item
+                    else None
+                )
+                timeliness = (
+                    self._validate_and_parse_score(item, "timeliness")
+                    if "timeliness" in item
+                    else None
+                )
 
                 explanation = item.get("explanation", "")
 
@@ -519,7 +537,7 @@ class MemoryBank:
                         "explanation": explanation
                     })
                 else:
-                    logger.warning(f"索引超出范围: {idx}")
+                    raise RuntimeError(f"LLM retrieval result index out of range: {idx}")
 
             # PM-121: 按相关性评分排序
             evaluations.sort(key=lambda x: x["score"], reverse=True)
@@ -551,8 +569,7 @@ class MemoryBank:
 
         except Exception as e:
             logger.error(f"LLM检索失败: {e}")
-            # 回退到简单检索
-            return self._fallback_retrieval(query, k, include_explanations)
+            raise
 
     def _parse_json_response(self, result_text: str) -> Optional[Dict[str, Any]]:
         """
@@ -669,13 +686,13 @@ class MemoryBank:
         Args:
             item: 评分项字典，包含各个维度的评分
             score_key: 评分键名（如'relevance_score', 'semantic_relevance'等）
-            default: 默认评分值（当评分无效时使用），根据评分类型设置合理的默认值
+            default: 保留旧签名兼容；无效评分不会再使用默认值兜底
 
         Returns:
             验证后的评分值（0.0-1.0），保留两位小数
 
         Raises:
-            ValueError: 如果评分无效且无法恢复
+            ValueError: 如果评分缺失、无效或超出范围
         """
         # 参数验证
         if not isinstance(item, dict):
@@ -686,21 +703,15 @@ class MemoryBank:
             logger.error(f"评分键名必须是非空字符串，实际值: {score_key}")
             raise ValueError(f"评分键名必须是非空字符串，实际值: {score_key}")
 
-        if not isinstance(default, (int, float)) or not (0.0 <= default <= 1.0):
-            logger.warning(f"默认值必须在0.0-1.0范围内，实际值: {default}，使用0.5")
-            default = 0.5
-
         # 检查评分字段是否存在
         if score_key not in item:
-            logger.warning(f"评分项中缺少'{score_key}'字段，使用默认值{default}")
-            return round(default, 2)
+            raise ValueError(f"评分项中缺少'{score_key}'字段")
 
         score_value = item[score_key]
 
         # 类型检查和处理
         if score_value is None:
-            logger.warning(f"'{score_key}'字段值为None，使用默认值{default}")
-            return round(default, 2)
+            raise ValueError(f"'{score_key}'字段值为None")
 
         # 尝试转换为浮点数
         try:
@@ -708,48 +719,24 @@ class MemoryBank:
                 # 处理字符串类型的评分
                 score_str = score_value.strip()
                 if not score_str:
-                    logger.warning(f"'{score_key}'字段为空字符串，使用默认值{default}")
-                    return round(default, 2)
+                    raise ValueError(f"'{score_key}'字段为空字符串")
 
                 # 尝试解析字符串
                 score = float(score_str)
             elif isinstance(score_value, (int, float)):
                 score = float(score_value)
             else:
-                logger.warning(f"'{score_key}'字段类型不支持: {type(score_value)}，使用默认值{default}")
-                return round(default, 2)
+                raise ValueError(f"'{score_key}'字段类型不支持: {type(score_value)}")
 
         except (ValueError, TypeError) as e:
-            logger.warning(f"无法将'{score_key}'转换为数字: {score_value}，错误: {e}，使用默认值{default}")
-            return round(default, 2)
+            raise ValueError(f"无法将'{score_key}'转换为数字: {score_value}") from e
 
         # 严格的范围验证
         if not (0.0 <= score <= 1.0):
-            # 记录详细的错误信息
-            logger.warning(
-                f"'{score_key}'评分超出有效范围[0.0, 1.0]: {score}，"
-                f"调整为默认值{default}"
-            )
-
-            # 对于轻微超出范围的情况，可以尝试修正
-            if score < 0.0:
-                logger.debug(f"负分修正为0.0: {score}")
-                score = 0.0
-            elif score > 1.0:
-                logger.debug(f"超过1.0的分数修正为1.0: {score}")
-                score = 1.0
-            else:
-                # 其他情况使用默认值
-                return round(default, 2)
+            raise ValueError(f"'{score_key}'评分超出有效范围[0.0, 1.0]: {score}")
 
         # 精度处理：保留两位小数，确保在有效范围内
         score = round(score, 2)
-
-        # 最终范围检查（处理四舍五入后可能超出范围的情况）
-        if score < 0.0:
-            score = 0.0
-        elif score > 1.0:
-            score = 1.0
 
         # 验证特定评分类型的合理性
         if score_key == "relevance_score":
@@ -775,43 +762,6 @@ class MemoryBank:
                     pass  # 忽略计算错误
         logger.debug(f"成功解析'{score_key}'评分: {score}")
         return score
-
-    def _fallback_retrieval(
-        self, query: str, k: int, include_explanations: bool
-    ) -> List[Union[MemoryEntry, RetrievalResult]]:
-        """
-        回退检索机制（当LLM调用失败时使用）
-
-        Args:
-            query: 查询文本
-            k: 返回数量
-            include_explanations: 是否包含解释
-
-        Returns:
-            检索结果列表
-        """
-        logger.warning("使用回退检索机制")
-
-        # 简单实现：返回前k个条目
-        k = min(k, len(self.entries))
-        results = []
-
-        for i in range(k):
-            memory_entry = self.entries[i]
-
-            if include_explanations:
-                # 创建简单的RetrievalResult
-                result = RetrievalResult(
-                    memory_entry=memory_entry,
-                    relevance_score=0.5,  # 默认评分
-                    explanation="回退检索：按时间顺序返回"
-                )
-            else:
-                result = memory_entry
-
-            results.append(result)
-
-        return results
 
     def _prune(self, target_ratio: float = 0.2) -> None:
         """

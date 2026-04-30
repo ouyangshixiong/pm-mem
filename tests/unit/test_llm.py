@@ -345,13 +345,21 @@ class TestMockLLMAdapter:
         assert adapter._client is client  # 缓存检查
 
     def test_get_client_deepseek_mode(self):
-        """测试获取客户端（DeepSeek模式）"""
+        """测试获取客户端（DeepSeek模式必须显式提供API密钥）"""
         adapter = MockLLMAdapter(use_mock=False)
 
-        # 由于MockLLMAdapter为测试环境提供了默认API密钥，应该能创建客户端
+        with pytest.raises(ValueError, match="DeepSeek API key is required"):
+            adapter.get_client()
+
+    def test_get_client_deepseek_mode_with_api_key(self):
+        """测试提供API密钥后可创建DeepSeek客户端"""
+        adapter = MockLLMAdapter(
+            use_mock=False,
+            deepseek_config={"api_key": "test-key"},
+        )
+
         client = adapter.get_client()
         assert client is not None
-        # 注意：这里实际上创建的是DeepSeekClient，但由于提供了测试API密钥，不会抛出异常
 
     def test_switch_modes(self):
         """测试模式切换"""

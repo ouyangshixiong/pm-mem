@@ -128,7 +128,7 @@ class ImportLayerAgent:
 # 已生成的前置记忆层
 {previous_summary or "（暂无前置层。）"}
 
-# 当前确定性草稿
+# 当前初始草稿
 {draft.content}
 
 # 外部故事
@@ -358,9 +358,6 @@ class ExternalWorkImportCoordinator:
         )
         work_id = existing_work_id
         created = False
-        if work_id is None and not dry_run:
-            work_id = memory_manager.create_work(payload.work_name)
-            created = True
 
         drafts: Dict[str, LayerDraft] = {}
         for agent in self.layer_agents:
@@ -375,6 +372,10 @@ class ExternalWorkImportCoordinator:
 
         review = self.review_agent.build(payload, drafts)
         remem_tasks: Dict[str, Dict[str, Any]] = {}
+        if work_id is None and not dry_run:
+            work_id = memory_manager.create_work(payload.work_name)
+            created = True
+
         if not dry_run and work_id is not None:
             for draft in drafts.values():
                 remem_tasks[draft.layer_id] = self._write_draft_via_remem(
@@ -445,6 +446,7 @@ class ExternalWorkImportCoordinator:
                 "llm_provider": draft.llm_provider,
                 "llm_model": draft.llm_model,
                 "layer_metadata": _draft_metadata(payload, draft),
+                "skip_retrieval": True,
             },
         )
         agent = ReMemAgent(
@@ -505,8 +507,7 @@ class ExternalWorkImportCoordinator:
                 f"deepseek_backup: {backup_error}",
                 1200,
             )
-            if not self.llm_settings.fallback_to_deterministic:
-                raise RuntimeError(draft.llm_error)
+            raise RuntimeError(draft.llm_error)
         return draft
 
     def _try_deepseek_backup(

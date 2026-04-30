@@ -9,6 +9,7 @@ import sys
 import os
 import tempfile
 import shutil
+import json
 
 # 添加src目录到Python路径
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
@@ -76,31 +77,30 @@ class TestReMemWorkflow:
 
     def _setup_mock_responses(self):
         """设置模拟LLM的响应"""
-        # 检索响应：总是返回前两个索引
-        self.mock_llm.responses["请仅输出索引列表"] = "0,1"
-
-        # 动作选择序列：模拟典型的工作流程
+        retrieval_response = json.dumps({
+            "results": [
+                {"index": 0, "relevance_score": 0.9, "explanation": "相关"},
+                {"index": 1, "relevance_score": 0.8, "explanation": "相关"},
+            ]
+        })
+        self.mock_llm.responses = {
+            "记忆检索评估任务": retrieval_response,
+            "请选择动作": ["think", "refine", "act"],
+            "refine:": (
+                "DELETE 1; ADD{如果3000端口被阿里云安全组阻止，可以使用nginx在80端口配置反向代理："
+                "location /app/ { proxy_pass http://localhost:3000/; }}"
+            ),
+            "act:": (
+                "Act: 建议使用nginx反向代理解决阿里云安全组对3000端口的限制，"
+                "配置示例：location /app/ { proxy_pass http://localhost:3000/; }"
+            ),
+            "think:": (
+                "Think: 用户遇到了阿里云安全组问题，需要检查端口3000的访问。"
+                "根据已有记忆，可以通过添加安全组规则或使用nginx反向代理解决。"
+                "考虑到用户已经配置了nginx，建议使用nginx进行转发。"
+            ),
+        }
         self.mock_llm.call_counter = 0
-        self.mock_llm.responses["请选择动作"] = ["think", "refine", "act"]
-
-        # Think响应
-        self.mock_llm.responses["think:"] = (
-            "Think: 用户遇到了阿里云安全组问题，需要检查端口3000的访问。"
-            "根据已有记忆，可以通过添加安全组规则或使用nginx反向代理解决。"
-            "考虑到用户已经配置了nginx，建议使用nginx进行转发。"
-        )
-
-        # Refine响应：添加新记忆并删除冗余
-        self.mock_llm.responses["refine:"] = (
-            "DELETE 1; ADD{如果3000端口被阿里云安全组阻止，可以使用nginx在80端口配置反向代理："
-            "location /app/ { proxy_pass http://localhost:3000/; }}"
-        )
-
-        # Act响应
-        self.mock_llm.responses["act:"] = (
-            "Act: 建议使用nginx反向代理解决阿里云安全组对3000端口的限制，"
-            "配置示例：location /app/ { proxy_pass http://localhost:3000/; }"
-        )
 
     def test_complete_workflow(self):
         """测试完整的工作流程（Think -> Refine -> Act）"""
@@ -127,7 +127,12 @@ class TestReMemWorkflow:
     def test_memory_retrieval_in_workflow(self):
         """测试工作流程中的记忆检索"""
         # 修改检索响应以测试特定场景
-        self.mock_llm.responses["请仅输出索引列表"] = "2,0"
+        self.mock_llm.responses["记忆检索评估任务"] = json.dumps({
+            "results": [
+                {"index": 2, "relevance_score": 0.9, "explanation": "相关"},
+                {"index": 0, "relevance_score": 0.8, "explanation": "相关"},
+            ]
+        })
 
         task_input = "如何测试API健康检查？"
         result = self.agent.run_task(task_input)

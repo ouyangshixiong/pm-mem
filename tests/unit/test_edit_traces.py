@@ -344,7 +344,13 @@ class TestEditTraces:
         """测试run_task返回编辑轨迹"""
         # 配置模拟LLM返回Refine命令
         def mock_llm_response(prompt):
-            if "Refine:" in prompt:
+            if "记忆检索评估任务" in prompt:
+                return json.dumps({
+                    "results": [
+                        {"index": 0, "relevance_score": 0.9, "explanation": "相关"},
+                    ]
+                })
+            elif "Refine:" in prompt:
                 return "DELETE 0; ADD{测试添加}; MERGE 1&2"
             elif "Act:" in prompt:
                 return "Act: 测试动作"

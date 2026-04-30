@@ -1,7 +1,7 @@
 """
 LLM工厂类
 
-提供统一的LLM实例创建和管理，支持配置化、多环境、自动降级等功能。
+提供统一的LLM实例创建和管理，支持配置化和多环境配置。
 """
 
 import os
@@ -53,8 +53,6 @@ class LLMFactory:
         "timeout": 30,
         "max_retries": 3,
         "connection_pool_size": 5,
-        "enable_mock_fallback": True,
-        "mock_fallback_delay": 0.1,
         "enable_health_check": True,
         "health_check_interval": 60,
     }
@@ -155,28 +153,17 @@ class LLMFactory:
         merged_kwargs = self.config.copy()
         merged_kwargs.update(kwargs)
 
-        try:
-            if provider == LLMProvider.DEEPSEEK.value:
-                return self._create_deepseek_llm(environment, merged_kwargs)
-            elif provider == LLMProvider.KIMI.value:
-                return self._create_kimi_llm(environment, merged_kwargs)
-            elif provider == LLMProvider.MIMO.value:
-                return self._create_mimo_llm(environment, merged_kwargs)
-            elif provider == LLMProvider.MOCK.value:
-                return self._create_mock_llm(environment, merged_kwargs)
-            elif provider == LLMProvider.DETERMINISTIC_MOCK.value:
-                return self._create_deterministic_mock_llm(environment, merged_kwargs)
-            else:
-                raise ValueError(f"不支持的LLM提供商: {provider}")
-        except Exception as e:
-            logger.error(f"创建LLM实例失败: {e}")
-
-            # 如果启用了模拟降级，则创建模拟LLM
-            if self.config.get("enable_mock_fallback", True):
-                logger.warning(f"创建{provider}失败，降级到模拟LLM")
-                return self._create_mock_llm(environment, merged_kwargs)
-            else:
-                raise
+        if provider == LLMProvider.DEEPSEEK.value:
+            return self._create_deepseek_llm(environment, merged_kwargs)
+        if provider == LLMProvider.KIMI.value:
+            return self._create_kimi_llm(environment, merged_kwargs)
+        if provider == LLMProvider.MIMO.value:
+            return self._create_mimo_llm(environment, merged_kwargs)
+        if provider == LLMProvider.MOCK.value:
+            return self._create_mock_llm(environment, merged_kwargs)
+        if provider == LLMProvider.DETERMINISTIC_MOCK.value:
+            return self._create_deterministic_mock_llm(environment, merged_kwargs)
+        raise ValueError(f"不支持的LLM提供商: {provider}")
 
     def _create_deepseek_llm(self, environment: str, kwargs: Dict[str, Any]) -> LLMInterface:
         """创建DeepSeek LLM实例"""
@@ -330,10 +317,10 @@ class LLMFactory:
         deepseek_config: Optional[Dict[str, Any]] = None,
     ) -> MockLLMAdapter:
         """
-        创建LLM适配器，支持测试和生产环境切换
+        创建LLM适配器
 
         Args:
-            use_mock: 是否使用模拟LLM，如为None则根据环境自动判断
+            use_mock: 是否使用模拟LLM；None 等同于 False，不按环境隐式启用 Mock
             mock_config: 模拟LLM配置
             deepseek_config: DeepSeek配置
 
@@ -341,9 +328,7 @@ class LLMFactory:
             MockLLMAdapter实例
         """
         if use_mock is None:
-            # 根据环境自动判断
-            environment = self.config["environment"]
-            use_mock = environment in [LLMEnvironment.DEVELOPMENT.value, LLMEnvironment.TESTING.value]
+            use_mock = False
 
         # 默认配置
         default_mock_config = {

@@ -16,8 +16,7 @@ def _create_llm(provider: Optional[str]):
     if provider == "kimi":
         api_key = os.getenv("KIMI_API_KEY")
         if not api_key:
-            from src.llm.mock_llm import MockLLM
-            return MockLLM()
+            raise RuntimeError("KIMI_API_KEY is required for --llm kimi")
 
         timeout_env = os.getenv("LLM_TIMEOUT")
         max_retries_env = os.getenv("LLM_MAX_RETRIES")
@@ -40,8 +39,7 @@ def _create_llm(provider: Optional[str]):
     if provider == "mimo":
         api_key = os.getenv("MIMO_API_KEY")
         if not api_key:
-            from src.llm.mock_llm import MockLLM
-            return MockLLM()
+            raise RuntimeError("MIMO_API_KEY is required for --llm mimo")
 
         timeout_env = os.getenv("LLM_TIMEOUT")
         max_retries_env = os.getenv("LLM_MAX_RETRIES")
@@ -63,8 +61,7 @@ def _create_llm(provider: Optional[str]):
     # 默认使用 deepseek
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
-        from src.llm.mock_llm import MockLLM
-        return MockLLM()
+        raise RuntimeError("DEEPSEEK_API_KEY is required for --llm deepseek")
 
     timeout_env = os.getenv("LLM_TIMEOUT")
     max_retries_env = os.getenv("LLM_MAX_RETRIES")

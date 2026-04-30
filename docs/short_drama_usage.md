@@ -110,9 +110,8 @@ curl -X POST http://localhost:8000/api/retrieve \
 - `top_k`：返回证据片段数量，默认 5。
 - `include_answer`：是否基于检索片段生成最终回答，默认 true。
 - `include_content`：是否返回证据正文，默认 true。
-- `fallback_to_text_score`：LLM 检索失败时是否退回文本匹配，默认 false。
 
-该接口不会写入或演化记忆。`/api/works/{work_id}/remem-task` 如需使用同一套 LLM 检索，可在 metadata 中传入 `"retrieval_mode": "llm"`；如只是查询，还应传入 `"update_memory": false`。
+该接口不会写入或演化记忆。检索必须由 LLM 完成；如果 LLM 不可用、返回非 JSON 或评分字段无效，接口会直接返回错误。`/api/works/{work_id}/remem-task` 使用同一套 LLM 检索；如只是查询，还应传入 `"update_memory": false`。
 
 ## 7. 测试与验收
 
@@ -122,4 +121,4 @@ curl -X POST http://localhost:8000/api/retrieve \
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q
 ```
 
-本次验收结果：`288 passed`。
+本次验收结果：`305 passed`。

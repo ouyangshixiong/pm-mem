@@ -5,8 +5,21 @@ from workflow import ShortDramaWorkflow
 class StaticLLM:
     def __init__(self):
         self.last_prompt = ""
+        self.prompts = []
 
     def __call__(self, prompt):
+        self.prompts.append(prompt)
+        if "LLM 本地文档检索任务" in prompt:
+            return """{
+  "results": [
+    {
+      "index": 0,
+      "relevance_score": 0.95,
+      "reason": "包含核心设定",
+      "matched_facts": ["林澈怕水"]
+    }
+  ]
+}"""
         self.last_prompt = prompt
         return """### 第1集 第1场
 林澈在旧码头救下女主，但没有改写核心设定。
@@ -46,7 +59,7 @@ def test_short_drama_workflow_injects_memory_and_respects_locks(tmp_path, monkey
 
     result = workflow.create_script_episode(work_id, "写第1集开场，地点为旧码头。")
 
-    assert "林澈怕水" in llm.last_prompt
+    assert any("林澈怕水" in prompt for prompt in llm.prompts)
     assert result["memory_updated"] is True
     assert result["remem_result"]["role"]["role_name"] == "编剧"
 

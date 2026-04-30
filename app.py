@@ -7,11 +7,14 @@ Run with:
 
 import html
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+import yaml
 
 import memory_manager
 from import_coordinator import (
@@ -58,9 +61,22 @@ class ReMemTaskRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class DeepSeekApiKeyUpdateRequest(BaseModel):
+    api_key: str = ""
+
+
+class RolePromptUpdateRequest(BaseModel):
+    prompt: str
+
+
 @app.get("/", response_class=HTMLResponse)
 def index_page() -> HTMLResponse:
     return HTMLResponse(_layout("短剧创作系统 - 记忆管理", _home_body(), _home_script()))
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page() -> HTMLResponse:
+    return HTMLResponse(_layout("系统配置", _settings_body(), _settings_script()))
 
 
 @app.get("/work/{work_id}", response_class=HTMLResponse)
@@ -258,6 +274,30 @@ def api_get_import_llm_config() -> Dict[str, Any]:
     return load_import_llm_settings().public_dict()
 
 
+@app.put("/api/import/deepseek-api-key")
+def api_update_deepseek_api_key(
+    payload: DeepSeekApiKeyUpdateRequest,
+) -> Dict[str, Any]:
+    try:
+        _save_deepseek_api_key(payload.api_key)
+        return load_import_llm_settings().public_dict()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/roles/{role_id}")
+def api_update_role_prompt(
+    role_id: str,
+    payload: RolePromptUpdateRequest,
+) -> Dict[str, Any]:
+    try:
+        return {"role": role_manager.update_role_prompt(role_id, payload.prompt)}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class _LocalGenerateAdapter:
     """Callable wrapper so ReMemAgent can use the configured local LLM client."""
 
@@ -298,6 +338,28 @@ def _ensure_work_exists(work_id: str) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _save_deepseek_api_key(api_key: str) -> None:
+    config_path = Path(os.getenv("PM_MEM_CONFIG") or "config.yaml").expanduser()
+    if config_path.exists():
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            data = {}
+    else:
+        data = {}
+
+    backup = data.setdefault("deepseek_backup", {})
+    if not isinstance(backup, dict):
+        backup = {}
+        data["deepseek_backup"] = backup
+    backup["api_key"] = str(api_key or "").strip()
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
 def _enrich_layer(layer: Dict[str, Any]) -> Dict[str, Any]:
     role_id = layer.get("processed_by_role_id") or role_manager.get_layer_role_id(
         layer["layer_id"]
@@ -336,12 +398,53 @@ def _layout(title: str, body: str, script: str) -> str:
     .prompt-box {{ white-space: pre-wrap; background: #f8fafc; border: 1px solid #d9dee7; border-radius: 8px; padding: 12px; font-size: 13px; line-height: 1.55; }}
     .role-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }}
     .role-item {{ border: 1px solid #d9dee7; border-radius: 8px; padding: 12px; background: #fff; }}
+    .evolution-list {{ display: flex; flex-direction: column; border: 1px solid #eaecf0; border-radius: 8px; overflow: hidden; background: #fff; }}
+    .evolution-row {{ width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; border: 0; border-bottom: 1px solid #eaecf0; background: #fff; padding: 12px 14px; text-align: left; color: inherit; }}
+    .evolution-row:last-child {{ border-bottom: 0; }}
+    .evolution-row:hover, .evolution-row:focus {{ background: #f8fbff; outline: none; }}
+    .evolution-row.is-updated {{ box-shadow: inset 4px 0 0 #2e90fa; }}
+    .evolution-row-main {{ min-width: 0; }}
+    .evolution-row-summary {{ color: #1f2933; font-weight: 700; line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+    .evolution-row-meta {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }}
+    .evolution-row-action {{ color: #175cd3; font-weight: 700; white-space: nowrap; }}
+    .task-input {{ margin-top: 10px; border-left: 3px solid #d0d5dd; background: #f8fafc; border-radius: 0 6px 6px 0; padding: 8px 10px; }}
+    .task-input-label {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; color: #667085; font-size: 12px; font-weight: 700; margin-bottom: 4px; }}
+    .task-input-note {{ color: #667085; font-weight: 500; }}
+    .task-input-text {{ color: #344054; line-height: 1.58; word-break: break-word; }}
+    .trace-time {{ min-width: 138px; text-align: right; }}
+    .trace-time-main {{ display: block; color: #1f2933; font-weight: 700; white-space: nowrap; }}
+    .trace-time-sub {{ color: #667085; font-size: 12px; margin-top: 2px; }}
+    .evolution-drawer-backdrop {{ position: fixed; inset: 0; background: rgba(16, 24, 40, 0.38); opacity: 0; pointer-events: none; transition: opacity 160ms ease; z-index: 1040; }}
+    .evolution-drawer-backdrop.is-open {{ opacity: 1; pointer-events: auto; }}
+    .evolution-drawer {{ position: fixed; top: 0; right: 0; width: min(760px, 92vw); height: 100vh; background: #fff; box-shadow: -18px 0 36px rgba(16, 24, 40, 0.18); transform: translateX(100%); transition: transform 180ms ease; z-index: 1041; display: flex; flex-direction: column; }}
+    .evolution-drawer.is-open {{ transform: translateX(0); }}
+    .drawer-head {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 18px 20px; border-bottom: 1px solid #eaecf0; }}
+    .drawer-title {{ font-size: 20px; font-weight: 800; line-height: 1.35; margin: 0; }}
+    .drawer-subtitle {{ color: #667085; margin-top: 6px; }}
+    .drawer-body {{ padding: 18px 20px 28px; overflow: auto; }}
+    .drawer-close {{ flex: 0 0 auto; }}
+    .drawer-section {{ margin-bottom: 18px; }}
+    .drawer-section-title {{ color: #475467; font-size: 13px; font-weight: 800; margin-bottom: 8px; }}
+    .change-list {{ margin-top: 12px; border-top: 1px solid #eaecf0; }}
+    .change-item {{ padding-top: 12px; }}
+    .change-header {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }}
+    .change-grid {{ display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr); gap: 12px; }}
+    .change-pane {{ min-width: 0; border-left: 3px solid #cfd4dc; padding: 10px 12px; background: #f8fafc; border-radius: 0 6px 6px 0; }}
+    .change-pane.after {{ border-left-color: #2e90fa; background: #f5fbff; }}
+    .change-pane.before-empty {{ color: #667085; background: #fbfcfe; }}
+    .change-label {{ color: #667085; font-size: 12px; font-weight: 700; margin-bottom: 6px; }}
+    .change-text {{ color: #1f2933; line-height: 1.62; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }}
+    .change-empty-state {{ margin-top: 12px; color: #667085; background: #f8fafc; border-left: 3px solid #d0d5dd; border-radius: 0 6px 6px 0; padding: 10px 12px; }}
     h1 {{ font-size: 26px; line-height: 1.25; margin: 0; }}
     h2 {{ font-size: 20px; margin: 0 0 14px; }}
     .breadcrumb {{ margin-bottom: 16px; }}
     @media (max-width: 768px) {{
       .topbar {{ align-items: flex-start; flex-direction: column; }}
       .editor, .preview {{ min-height: 360px; max-height: none; }}
+      .evolution-row {{ grid-template-columns: 1fr; }}
+      .evolution-row-summary {{ white-space: normal; }}
+      .trace-time {{ min-width: 0; text-align: left; }}
+      .change-grid {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -387,6 +490,66 @@ def _layout(title: str, body: str, script: str) -> str:
       text = text.replace(/\\n/g, '<br>');
       return text || '<span class="text-secondary">暂无内容</span>';
     }}
+    function parseDisplayDate(value) {{
+      const source = String(value ?? '').trim();
+      if (!source) return null;
+      let normalized = source;
+      if (normalized.includes('T') && !/[zZ]|[+-]\\d{{2}}:?\\d{{2}}$/.test(normalized)) {{
+        normalized += 'Z';
+      }} else if (!normalized.includes('T')) {{
+        normalized = normalized.replace(' ', 'T');
+      }}
+      const date = new Date(normalized);
+      if (Number.isNaN(date.getTime())) return null;
+      return date;
+    }}
+    function formatDisplayTime(value) {{
+      const date = parseDisplayDate(value);
+      if (!date) return String(value ?? '');
+      const dateText = new Intl.DateTimeFormat('zh-CN', {{
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }}).format(date).replaceAll('/', '-');
+      const timeText = new Intl.DateTimeFormat('zh-CN', {{
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }}).format(date);
+      return `${{dateText}} ${{timeText}}`;
+    }}
+    function formatTraceTime(value) {{
+      const date = parseDisplayDate(value);
+      if (!date) return String(value ?? '');
+      const now = new Date();
+      const sameDay = date.getFullYear() === now.getFullYear()
+        && date.getMonth() === now.getMonth()
+        && date.getDate() === now.getDate();
+      const timeText = new Intl.DateTimeFormat('zh-CN', {{
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }}).format(date);
+      if (sameDay) return `今天 ${{timeText}}`;
+      return formatDisplayTime(value);
+    }}
+    function formatRelativeTime(value) {{
+      const date = parseDisplayDate(value);
+      if (!date) return '';
+      const diffMs = Date.now() - date.getTime();
+      const absMs = Math.abs(diffMs);
+      if (absMs > 7 * 24 * 60 * 60 * 1000) return '';
+      if (diffMs < -60 * 1000) return '稍后';
+      if (diffMs < 60 * 1000) return '刚刚';
+      const minutes = Math.floor(diffMs / (60 * 1000));
+      if (minutes < 60) return `${{minutes}} 分钟前`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) return `${{hours}} 小时前`;
+      const days = Math.floor(hours / 24);
+      return `${{days}} 天前`;
+    }}
   </script>
   <script>{script}</script>
 </body>
@@ -400,7 +563,10 @@ def _home_body() -> str:
     <h1>短剧创作系统 - 记忆管理</h1>
     <div class="text-secondary mt-1">作品管理与分层记忆查看/修改</div>
   </div>
-  <button class="btn btn-primary" onclick="createWork()">新增作品</button>
+  <div class="d-flex align-items-center gap-2">
+    <a class="btn btn-outline-secondary" href="/settings">系统配置</a>
+    <button class="btn btn-primary" onclick="createWork()">新增作品</button>
+  </div>
 </div>
 <section class="panel">
   <div class="table-responsive">
@@ -438,8 +604,8 @@ async function loadWorks() {
       <tr>
         <td>${escapeHtml(work.work_name)}</td>
         <td class="mono">${escapeHtml(work.work_id)}</td>
-        <td>${escapeHtml(work.create_time)}</td>
-        <td>${escapeHtml(work.update_time)}</td>
+        <td>${escapeHtml(formatDisplayTime(work.create_time))}</td>
+        <td>${escapeHtml(formatDisplayTime(work.update_time))}</td>
         <td><span class="badge text-bg-light">${escapeHtml(work.status)}</span></td>
         <td class="text-end">
           <a class="btn btn-sm btn-outline-primary" href="/work/${encodeURIComponent(work.work_id)}">进入管理</a>
@@ -480,6 +646,139 @@ loadWorks();
 """
 
 
+def _settings_body() -> str:
+    return """
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/">首页</a></li>
+    <li class="breadcrumb-item active">系统配置</li>
+  </ol>
+</nav>
+<div class="topbar">
+  <div>
+    <h1>系统配置</h1>
+    <div class="text-secondary mt-1">跨作品生效的模型调用与角色 Prompt 配置</div>
+  </div>
+  <a class="btn btn-outline-secondary" href="/">返回首页</a>
+</div>
+<section class="panel mb-3">
+  <div class="d-flex align-items-start justify-content-between gap-3 mb-2">
+    <h2>导入模型</h2>
+    <span id="llmEnabledBadge" class="badge muted-badge">读取中</span>
+  </div>
+  <div class="row g-3" id="llmMeta"></div>
+  <div class="row g-2 align-items-end mt-3">
+    <div class="col-md-8">
+      <label class="form-label text-secondary small" for="deepseekApiKey">DeepSeek API Key</label>
+      <input class="form-control" id="deepseekApiKey" type="password" autocomplete="off" placeholder="输入新的 API Key；留空不修改">
+    </div>
+    <div class="col-md-4">
+      <button class="btn btn-primary w-100" onclick="saveDeepSeekApiKey()">保存 DeepSeek Key</button>
+    </div>
+  </div>
+  <div class="text-secondary small mt-2">出于安全考虑，页面只显示是否已配置，不回显已保存的 Key。</div>
+</section>
+<section class="panel">
+  <h2>角色 Prompt 配置</h2>
+  <div class="role-grid" id="rolesBody"></div>
+</section>
+<div id="status" class="status-line small mt-3"></div>
+"""
+
+
+def _settings_script() -> str:
+    return """
+async function loadSettings() {
+  try {
+    const [rolesData, llmConfig] = await Promise.all([
+      requestJson('/api/roles'),
+      requestJson('/api/import/llm-config')
+    ]);
+    renderLlmConfig(llmConfig);
+    renderRoles(rolesData.roles || []);
+  } catch (err) {
+    showMessage('status', err.message, 'danger');
+  }
+}
+function renderLlmConfig(config) {
+  const primary = config.primary || config;
+  const backup = config.deepseek_backup || {};
+  const badge = document.getElementById('llmEnabledBadge');
+  badge.className = 'badge process-badge';
+  badge.textContent = '默认调用';
+  document.getElementById('llmMeta').innerHTML = `
+    <div class="col-md-4"><div class="text-secondary small">Primary Endpoint</div><div class="mono">${escapeHtml(primary.endpoint)}</div></div>
+    <div class="col-md-4"><div class="text-secondary small">Primary Model</div><div class="mono">${escapeHtml(primary.model)}</div></div>
+    <div class="col-md-4"><div class="text-secondary small">DeepSeek Backup</div><div>${backup.api_key_configured ? '已配置' : '未配置 API Key'}</div><div class="mono small">${escapeHtml(backup.model || '')}</div></div>
+    <div class="col-md-8"><div class="text-secondary small">DeepSeek Endpoint</div><div class="mono">${escapeHtml(backup.endpoint || '')}</div></div>
+    <div class="col-md-4"><div class="text-secondary small">Fallback</div><div>${config.fallback_to_deterministic ? '两路失败后保留确定性草稿' : '两路失败即中断'}</div></div>
+  `;
+}
+async function saveDeepSeekApiKey() {
+  const input = document.getElementById('deepseekApiKey');
+  const value = input.value.trim();
+  if (!value) {
+    showMessage('status', '请输入新的 DeepSeek API Key', 'danger');
+    return;
+  }
+  try {
+    const config = await requestJson('/api/import/deepseek-api-key', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({api_key: value})
+    });
+    input.value = '';
+    renderLlmConfig(config);
+    showMessage('status', 'DeepSeek API Key 已保存');
+  } catch (err) {
+    showMessage('status', err.message, 'danger');
+  }
+}
+function renderRoles(roles) {
+  const body = document.getElementById('rolesBody');
+  if (!roles.length) {
+    body.innerHTML = '<div class="text-secondary">暂无角色配置</div>';
+    return;
+  }
+  body.innerHTML = roles.map(role => `
+    <details class="role-item" data-role-id="${escapeHtml(role.role_id)}">
+      <summary><strong>${escapeHtml(role.role_name)}</strong> <span class="mono text-secondary">${escapeHtml(role.role_file)}</span></summary>
+      <textarea class="form-control editor mt-2" id="rolePrompt_${escapeHtml(role.role_id)}" spellcheck="false">${escapeHtml(role.prompt)}</textarea>
+      <div class="d-flex align-items-center gap-2 mt-2">
+        <button class="btn btn-sm btn-primary" onclick="saveRolePrompt('${escapeHtml(role.role_id)}')">保存 Prompt</button>
+        <span class="status-line small" id="roleStatus_${escapeHtml(role.role_id)}"></span>
+      </div>
+    </details>
+  `).join('');
+}
+async function saveRolePrompt(roleId) {
+  const editor = document.getElementById('rolePrompt_' + roleId);
+  const status = document.getElementById('roleStatus_' + roleId);
+  if (!editor) return;
+  try {
+    const data = await requestJson('/api/roles/' + encodeURIComponent(roleId), {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({prompt: editor.value})
+    });
+    editor.value = (data.role || {}).prompt || editor.value;
+    if (status) {
+      status.className = 'status-line small text-success';
+      status.textContent = '已保存';
+    }
+  } catch (err) {
+    if (status) {
+      status.className = 'status-line small text-danger';
+      status.textContent = err.message;
+    } else {
+      showMessage('status', err.message, 'danger');
+    }
+  }
+}
+loadSettings();
+"""
+
+
 def _work_body() -> str:
     return """
 <nav aria-label="breadcrumb">
@@ -493,41 +792,31 @@ def _work_body() -> str:
     <h1 id="workName">作品管理</h1>
     <div class="text-secondary mt-1 mono" id="workId"></div>
   </div>
-  <a class="btn btn-outline-secondary" href="/">返回首页</a>
+  <div class="d-flex align-items-center gap-2">
+    <a class="btn btn-outline-secondary" href="/settings">系统配置</a>
+    <a class="btn btn-outline-secondary" href="/">返回首页</a>
+  </div>
 </div>
 <section class="panel mb-3">
   <div class="row g-3" id="workMeta"></div>
 </section>
 <section class="panel mb-3">
   <div class="d-flex align-items-start justify-content-between gap-3 mb-2">
-    <h2>导入模型</h2>
-    <span id="llmEnabledBadge" class="badge muted-badge">读取中</span>
-  </div>
-  <div class="row g-3" id="llmMeta"></div>
-</section>
-<section class="panel mb-3">
-  <h2>角色 Prompt 配置</h2>
-  <div class="role-grid" id="rolesBody"></div>
-</section>
-<section class="panel mb-3">
-  <div class="d-flex align-items-start justify-content-between gap-3 mb-2">
     <h2>记忆演化</h2>
     <button class="btn btn-sm btn-outline-secondary" onclick="loadTraces()">刷新</button>
   </div>
-  <div class="table-responsive">
-    <table class="table table-hover align-middle">
-      <thead>
-        <tr>
-          <th>任务</th>
-          <th>角色</th>
-          <th>状态</th>
-          <th>事件</th>
-          <th>更新时间</th>
-        </tr>
-      </thead>
-      <tbody id="tracesBody"></tbody>
-    </table>
-  </div>
+  <div class="evolution-list" id="tracesBody"></div>
+  <div class="evolution-drawer-backdrop" id="traceDrawerBackdrop" onclick="closeTraceDrawer()"></div>
+  <aside class="evolution-drawer" id="traceDrawer" aria-hidden="true" aria-label="记忆演化详情">
+    <div class="drawer-head">
+      <div>
+        <div class="drawer-title" id="traceDrawerTitle">记忆演化详情</div>
+        <div class="drawer-subtitle" id="traceDrawerSubtitle"></div>
+      </div>
+      <button class="btn btn-sm btn-outline-secondary drawer-close" onclick="closeTraceDrawer()">关闭</button>
+    </div>
+    <div class="drawer-body" id="traceDrawerBody"></div>
+  </aside>
 </section>
 <section class="panel">
   <h2>分层记忆</h2>
@@ -556,12 +845,11 @@ def _work_body() -> str:
 def _work_script(work_id: str) -> str:
     return f"""
 const WORK_ID = {json.dumps(work_id, ensure_ascii=False)};
+let currentTraces = [];
 async function loadWork() {{
   try {{
-    const [data, rolesData, llmConfig, tracesData] = await Promise.all([
+    const [data, tracesData] = await Promise.all([
       requestJson('/api/works/' + encodeURIComponent(WORK_ID)),
-      requestJson('/api/roles'),
-      requestJson('/api/import/llm-config'),
       requestJson('/api/works/' + encodeURIComponent(WORK_ID) + '/traces')
     ]);
     const work = data.work;
@@ -570,11 +858,9 @@ async function loadWork() {{
     document.getElementById('workId').textContent = work.work_id;
     document.getElementById('workMeta').innerHTML = `
       <div class="col-md-4"><div class="text-secondary small">作品ID</div><div class="mono">${{escapeHtml(work.work_id)}}</div></div>
-      <div class="col-md-4"><div class="text-secondary small">创建时间</div><div>${{escapeHtml(work.create_time)}}</div></div>
-      <div class="col-md-4"><div class="text-secondary small">最后更新时间</div><div>${{escapeHtml(work.update_time)}}</div></div>
+      <div class="col-md-4"><div class="text-secondary small">创建时间</div><div>${{escapeHtml(formatDisplayTime(work.create_time))}}</div></div>
+      <div class="col-md-4"><div class="text-secondary small">最后更新时间</div><div>${{escapeHtml(formatDisplayTime(work.update_time))}}</div></div>
     `;
-    renderLlmConfig(llmConfig);
-    renderRoles(rolesData.roles || []);
     renderTraces(tracesData.traces || []);
     document.getElementById('layersBody').innerHTML = data.layers.map(layer => `
       <tr>
@@ -583,7 +869,7 @@ async function loadWork() {{
         <td>${{layer.locked ? '<span class="badge lock-badge">已锁定</span>' : '<span class="badge unlock-badge">未锁定</span>'}}</td>
         <td>${{renderLayerRole(layer)}}</td>
         <td>${{renderLayerLlm(layer)}}</td>
-        <td>${{escapeHtml(layer.last_updated)}}</td>
+        <td>${{escapeHtml(formatDisplayTime(layer.last_updated))}}</td>
         <td>${{escapeHtml(layer.updated_by)}}</td>
         <td class="text-end">
           <a class="btn btn-sm btn-outline-primary" href="/work/${{encodeURIComponent(WORK_ID)}}/layer/${{encodeURIComponent(layer.layer_id)}}">编辑</a>
@@ -593,33 +879,6 @@ async function loadWork() {{
   }} catch (err) {{
     showMessage('status', err.message, 'danger');
   }}
-}}
-function renderLlmConfig(config) {{
-  const primary = config.primary || config;
-  const backup = config.deepseek_backup || {{}};
-  const badge = document.getElementById('llmEnabledBadge');
-  badge.className = 'badge process-badge';
-  badge.textContent = '默认调用';
-  document.getElementById('llmMeta').innerHTML = `
-    <div class="col-md-4"><div class="text-secondary small">Primary Endpoint</div><div class="mono">${{escapeHtml(primary.endpoint)}}</div></div>
-    <div class="col-md-4"><div class="text-secondary small">Primary Model</div><div class="mono">${{escapeHtml(primary.model)}}</div></div>
-    <div class="col-md-4"><div class="text-secondary small">DeepSeek Backup</div><div>${{backup.api_key_configured ? '已配置' : '未配置 API Key'}}</div><div class="mono small">${{escapeHtml(backup.model || '')}}</div></div>
-    <div class="col-md-8"><div class="text-secondary small">DeepSeek Endpoint</div><div class="mono">${{escapeHtml(backup.endpoint || '')}}</div></div>
-    <div class="col-md-4"><div class="text-secondary small">Fallback</div><div>${{config.fallback_to_deterministic ? '两路失败后保留确定性草稿' : '两路失败即中断'}}</div></div>
-  `;
-}}
-function renderRoles(roles) {{
-  const body = document.getElementById('rolesBody');
-  if (!roles.length) {{
-    body.innerHTML = '<div class="text-secondary">暂无角色配置</div>';
-    return;
-  }}
-  body.innerHTML = roles.map(role => `
-    <details class="role-item">
-      <summary><strong>${{escapeHtml(role.role_name)}}</strong> <span class="mono text-secondary">${{escapeHtml(role.role_file)}}</span></summary>
-      <div class="prompt-box mt-2">${{escapeHtml(role.prompt)}}</div>
-    </details>
-  `).join('');
 }}
 function renderLayerRole(layer) {{
   const roleName = layer.processed_by_role_name || layer.default_role_name || layer.default_role_id || '';
@@ -647,19 +906,129 @@ async function loadTraces() {{
 }}
 function renderTraces(traces) {{
   const body = document.getElementById('tracesBody');
+  currentTraces = traces;
+  closeTraceDrawer();
   if (!traces.length) {{
-    body.innerHTML = '<tr><td colspan="5" class="text-secondary">暂无演化轨迹</td></tr>';
+    body.innerHTML = '<div class="change-empty-state">暂无演化轨迹</div>';
     return;
   }}
-  body.innerHTML = traces.map(trace => `
-    <tr>
-      <td><div>${{escapeHtml(trace.task_input)}}</div><div class="mono text-secondary">${{escapeHtml(trace.task_id)}}</div></td>
-      <td>${{escapeHtml((trace.role || {{}}).role_name || (trace.role || {{}}).role_id || '')}}</td>
-      <td><span class="badge process-badge">${{escapeHtml(trace.status)}}</span></td>
-      <td>${{escapeHtml(trace.event_count)}}</td>
-      <td>${{escapeHtml(trace.finished_at || trace.started_at)}}</td>
-    </tr>
+  body.innerHTML = traces.map((trace, index) => `
+    <button class="evolution-row ${{trace.memory_updated ? 'is-updated' : ''}}" type="button" onclick="openTraceDrawer(${{index}})">
+      <div class="evolution-row-main">
+        <div class="evolution-row-summary">${{escapeHtml(traceSummary(trace))}}</div>
+        <div class="evolution-row-meta">
+          ${{renderTraceLayers(trace)}}
+          <span class="badge ${{trace.memory_updated ? 'unlock-badge' : 'muted-badge'}}">${{trace.memory_updated ? '已写入记忆' : '未写入'}}</span>
+          <span class="badge process-badge">${{escapeHtml(trace.status || 'unknown')}}</span>
+          <span class="text-secondary small">${{escapeHtml((trace.role || {{}}).role_name || (trace.role || {{}}).role_id || '未记录角色')}}</span>
+          <span class="text-secondary small">${{escapeHtml(trace.event_count || 0)}} 个事件</span>
+        </div>
+      </div>
+      <div>
+        ${{renderTraceTime(trace.finished_at || trace.started_at)}}
+        <div class="evolution-row-action">查看详情</div>
+      </div>
+    </button>
   `).join('');
+}}
+function traceSummary(trace) {{
+  const roleName = (trace.role || {{}}).role_name || (trace.role || {{}}).role_id || '未知角色';
+  const change = (trace.changes || [])[0] || {{}};
+  const layerName = change.layer_name || ((trace.target_layers || [])[0] || {{}}).layer_name || '未知分层';
+  const layerFile = change.layer_file || ((trace.target_layers || [])[0] || {{}}).layer_file || layerName;
+  const operation = change.operation_label || (trace.memory_updated ? '写入' : '处理');
+  const lengthText = change.content_length ? `，约 ${{change.content_length}} 字` : '';
+  return `${{roleName}} 向 ${{layerFile}} ${{operation}}了记忆${{lengthText}}`;
+}}
+function renderTraceLayers(trace) {{
+  const layers = trace.target_layers || [];
+  if (!layers.length) return '<span class="badge muted-badge">未记录分层</span>';
+  return layers.map(layer => `
+    <span class="badge muted-badge">${{escapeHtml(layer.layer_name || layer.layer_id || '未知分层')}}</span>
+  `).join('');
+}}
+function renderTraceTime(value) {{
+  const raw = escapeHtml(value || '');
+  const display = escapeHtml(formatTraceTime(value));
+  const relative = formatRelativeTime(value);
+  return `
+    <div class="trace-time">
+      <time class="trace-time-main" datetime="${{raw}}" title="${{raw}}">${{display}}</time>
+      ${{relative ? `<div class="trace-time-sub">${{escapeHtml(relative)}}</div>` : ''}}
+    </div>
+  `;
+}}
+function openTraceDrawer(index) {{
+  const trace = currentTraces[index];
+  if (!trace) return;
+  const title = traceSummary(trace);
+  const subtitle = `${{formatTraceTime(trace.finished_at || trace.started_at)}} · ${{escapeHtml((trace.role || {{}}).role_name || (trace.role || {{}}).role_id || '未记录角色')}} · ${{escapeHtml(trace.task_id || '')}}`;
+  document.getElementById('traceDrawerTitle').textContent = title;
+  document.getElementById('traceDrawerSubtitle').textContent = subtitle;
+  document.getElementById('traceDrawerBody').innerHTML = `
+    <div class="drawer-section">
+      <div class="drawer-section-title">演化任务输入</div>
+      <div class="task-input">
+        <div class="task-input-label">
+          <span>工作流给 ReMem 的任务目标</span>
+          <span class="task-input-note">不是角色 Prompt</span>
+        </div>
+        <div class="task-input-text">${{escapeHtml(trace.task_input || '未记录任务')}}</div>
+      </div>
+    </div>
+    <div class="drawer-section">
+      <div class="drawer-section-title">文字变化</div>
+      ${{renderTraceChanges(trace)}}
+    </div>
+  `;
+  document.getElementById('traceDrawerBackdrop').classList.add('is-open');
+  document.getElementById('traceDrawer').classList.add('is-open');
+  document.getElementById('traceDrawer').setAttribute('aria-hidden', 'false');
+}}
+function closeTraceDrawer() {{
+  const drawer = document.getElementById('traceDrawer');
+  const backdrop = document.getElementById('traceDrawerBackdrop');
+  if (!drawer || !backdrop) return;
+  drawer.classList.remove('is-open');
+  backdrop.classList.remove('is-open');
+  drawer.setAttribute('aria-hidden', 'true');
+}}
+function renderTraceChanges(trace) {{
+  const changes = trace.changes || [];
+  if (!changes.length) {{
+    return '<div class="change-empty-state">本次轨迹没有记录新的记忆文字。</div>';
+  }}
+  const overflow = trace.change_count > changes.length
+    ? `<div class="text-secondary small mt-2">还有 ${{trace.change_count - changes.length}} 条写入未在列表中展开。</div>`
+    : '';
+  return `<div class="change-list">${{changes.map(renderTraceChange).join('')}}${{overflow}}</div>`;
+}}
+function renderTraceChange(change) {{
+  const beforeClass = change.before_empty ? 'change-pane before-empty' : 'change-pane';
+  const beforeLabel = change.before_empty ? '演化前为空' : '演化前检索快照';
+  const beforeText = change.before_empty
+    ? '本次演化开始前，该分层没有正文内容；右侧是本次新增写入的文字。'
+    : (change.before_excerpt || '未记录演化前快照');
+  const lengthText = change.content_length ? `${{change.content_length}} 字` : '';
+  return `
+    <div class="change-item">
+      <div class="change-header">
+        <span class="badge unlock-badge">${{escapeHtml(change.operation_label || '演化')}}</span>
+        <strong>${{escapeHtml(change.layer_name || change.layer_id || '未知分层')}}</strong>
+        ${{lengthText ? `<span class="text-secondary small">写入 ${{escapeHtml(lengthText)}}</span>` : ''}}
+      </div>
+      <div class="change-grid">
+        <div class="${{beforeClass}}">
+          <div class="change-label">${{escapeHtml(beforeLabel)}}</div>
+          <div class="change-text">${{escapeHtml(beforeText)}}</div>
+        </div>
+        <div class="change-pane after">
+          <div class="change-label">本次写入文字</div>
+          <div class="change-text">${{escapeHtml(change.after_excerpt || '未记录写入文本')}}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }}
 loadWork();
 """

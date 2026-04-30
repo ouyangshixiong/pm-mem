@@ -326,6 +326,7 @@ def get_work_traces(work_id: str, limit: int = 50) -> List[Dict[str, Any]]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
+        changes = _trace_changes(data)
         traces.append(
             {
                 "task_id": data.get("task_id", path.stem),
@@ -333,10 +334,16 @@ def get_work_traces(work_id: str, limit: int = 50) -> List[Dict[str, Any]]:
                 "status": data.get("status", ""),
                 "started_at": data.get("started_at", ""),
                 "finished_at": data.get("finished_at", ""),
-                "task_input": _summarize(data.get("task_input", ""), 120),
+                "task_input": _summarize(data.get("task_input", ""), 180),
                 "role": data.get("role", {}),
                 "event_count": len(data.get("events", [])),
                 "result_summary": data.get("result_summary", {}),
+                "memory_updated": bool(
+                    data.get("result_summary", {}).get("memory_updated") or changes
+                ),
+                "target_layers": _trace_target_layers(data, changes),
+                "change_count": len(changes),
+                "changes": changes[:3],
             }
         )
         if len(traces) >= limit:
@@ -355,6 +362,219 @@ def get_work_trace(work_id: str, task_id: str) -> Dict[str, Any]:
     if not trace_path.is_file():
         raise FileNotFoundError(f"trace not found: {task_id}")
     return json.loads(trace_path.read_text(encoding="utf-8"))
+
+
+def _trace_changes(trace: Dict[str, Any]) -> List[Dict[str, Any]]:
+    retrieved_by_layer = _trace_retrieved_records(trace)
+    changes: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in _trace_applied_operations(trace):
+        operation = item.get("operation") if isinstance(item, dict) else {}
+        if not isinstance(operation, dict):
+            operation = {}
+        detail = item.get("detail") if isinstance(item, dict) else {}
+        if not isinstance(detail, dict):
+            detail = {}
+        metadata = operation.get("metadata") if isinstance(operation, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        layer_id = (
+            metadata.get("layer_id")
+            or metadata.get("target_layer")
+            or detail.get("layer_id")
+            or _single_trace_target_layer(trace)
+            or ""
+        )
+        operation_type = str(
+            operation.get("operation_type") or operation.get("type") or ""
+        ).strip()
+        content = str(operation.get("content") or "")
+        fingerprint = (
+            layer_id,
+            operation_type,
+            content[:120],
+            item.get("status", ""),
+        )
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+
+        layer = _LAYER_BY_ID.get(layer_id, {})
+        before_text = retrieved_by_layer.get(layer_id, "")
+        layer_name = layer.get("layer_name") or layer_id or "未知分层"
+        before_empty = _is_empty_memory_text(before_text)
+        before_excerpt = (
+            ""
+            if before_empty
+            else _trace_text_excerpt(
+                _strip_retrieval_layer_heading(before_text, layer_name),
+                max_length=900,
+            )
+        )
+        after_excerpt = _trace_text_excerpt(content, max_length=1200)
+        changes.append(
+            {
+                "layer_id": layer_id,
+                "layer_name": layer_name,
+                "layer_file": layer.get("layer_file") or "",
+                "operation_type": operation_type,
+                "operation_label": _operation_label(operation_type),
+                "status": item.get("status", ""),
+                "before_excerpt": before_excerpt,
+                "before_state": "empty" if before_empty else "snapshot",
+                "after_excerpt": after_excerpt or "未记录写入文本",
+                "before_empty": before_empty,
+                "content_length": len(content),
+            }
+        )
+    return changes
+
+
+def _trace_retrieved_records(trace: Dict[str, Any]) -> Dict[str, str]:
+    records_by_layer: Dict[str, str] = {}
+    for event in trace.get("events", []):
+        if not isinstance(event, dict) or event.get("event_type") != "retrieval":
+            continue
+        payload = (
+            event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        )
+        for record in payload.get("records", []):
+            if not isinstance(record, dict):
+                continue
+            metadata = (
+                record.get("metadata")
+                if isinstance(record.get("metadata"), dict)
+                else {}
+            )
+            layer_id = metadata.get("layer_id") or _layer_id_from_record_id(
+                record.get("id")
+            )
+            if layer_id and layer_id not in records_by_layer:
+                records_by_layer[layer_id] = str(record.get("content") or "")
+    return records_by_layer
+
+
+def _trace_applied_operations(trace: Dict[str, Any]) -> List[Dict[str, Any]]:
+    applied: List[Dict[str, Any]] = []
+
+    root_applied = trace.get("applied_operations")
+    if isinstance(root_applied, list):
+        applied.extend(item for item in root_applied if isinstance(item, dict))
+
+    for event in trace.get("events", []):
+        if not isinstance(event, dict):
+            continue
+        payload = (
+            event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        )
+        apply_result = payload.get("apply_result")
+        if isinstance(apply_result, dict):
+            applied.extend(
+                item
+                for item in apply_result.get("applied_operations", [])
+                if isinstance(item, dict)
+            )
+
+        append_result = payload.get("append_result")
+        if isinstance(append_result, dict):
+            metadata = append_result.get("metadata")
+            if isinstance(metadata, dict):
+                nested_apply_result = metadata.get("apply_result")
+                if isinstance(nested_apply_result, dict):
+                    applied.extend(
+                        item
+                        for item in nested_apply_result.get("applied_operations", [])
+                        if isinstance(item, dict)
+                    )
+    return applied
+
+
+def _trace_target_layers(
+    trace: Dict[str, Any], changes: List[Dict[str, Any]]
+) -> List[Dict[str, str]]:
+    layer_ids = []
+    for change in changes:
+        layer_id = change.get("layer_id")
+        if layer_id and layer_id not in layer_ids:
+            layer_ids.append(layer_id)
+
+    context = trace.get("context") if isinstance(trace.get("context"), dict) else {}
+    metadata = (
+        context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    )
+    for layer_id in metadata.get("target_layers", []):
+        if layer_id and layer_id not in layer_ids:
+            layer_ids.append(layer_id)
+
+    return [
+        {
+            "layer_id": layer_id,
+            "layer_name": _LAYER_BY_ID.get(layer_id, {}).get("layer_name")
+            or str(layer_id),
+            "layer_file": _LAYER_BY_ID.get(layer_id, {}).get("layer_file") or "",
+        }
+        for layer_id in layer_ids
+    ]
+
+
+def _single_trace_target_layer(trace: Dict[str, Any]) -> str:
+    context = trace.get("context") if isinstance(trace.get("context"), dict) else {}
+    metadata = (
+        context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    )
+    target_layers = metadata.get("target_layers")
+    if isinstance(target_layers, list) and len(target_layers) == 1:
+        return str(target_layers[0])
+    return ""
+
+
+def _layer_id_from_record_id(record_id: Any) -> str:
+    if not isinstance(record_id, str) or ":" not in record_id:
+        return ""
+    candidate = record_id.rsplit(":", 1)[-1]
+    return candidate if candidate in _LAYER_BY_ID else ""
+
+
+def _trace_text_excerpt(content: str, max_length: int = 360) -> str:
+    text = str(content or "").strip()
+    if text.startswith("Act:"):
+        text = text[4:].strip()
+    lines = []
+    for raw_line in text.splitlines():
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
+        if line:
+            lines.append(line)
+    compact = "\n".join(lines)
+    if len(compact) <= max_length:
+        return compact
+    return compact[:max_length].rstrip() + "..."
+
+
+def _strip_retrieval_layer_heading(content: str, layer_name: str) -> str:
+    lines = str(content or "").splitlines()
+    if lines and re.fullmatch(r"#+\s*" + re.escape(str(layer_name)), lines[0].strip()):
+        return "\n".join(lines[1:]).strip()
+    return str(content or "")
+
+
+def _is_empty_memory_text(content: str) -> bool:
+    text = re.sub(r"^#+\s+.*$", "", str(content or ""), flags=re.MULTILINE)
+    text = text.replace("（暂无内容）", "").strip()
+    return not text
+
+
+def _operation_label(operation_type: str) -> str:
+    labels = {
+        "append": "新增",
+        "add": "新增",
+        "replace": "替换",
+        "merge": "合并",
+        "flag_conflict": "冲突标记",
+        "append_task_result": "写入结果",
+    }
+    return labels.get(operation_type, operation_type or "演化")
 
 
 def _works_dir() -> Path:

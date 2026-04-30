@@ -105,3 +105,10 @@ def test_app_remem_task_routes_memory_updates_through_agent(tmp_path, monkeypatc
     traces = client.get(f"/api/works/{work_id}/traces").json()["traces"]
     assert traces
     assert traces[0]["task_id"] == data["task_id"]
+    assert traces[0]["memory_updated"] is True
+    assert traces[0]["target_layers"][0]["layer_id"] == "script_archive"
+    assert traces[0]["target_layers"][0]["layer_file"] == "05_剧本档案层.md"
+    assert traces[0]["changes"][0]["layer_file"] == "05_剧本档案层.md"
+    assert traces[0]["changes"][0]["operation_label"] == "新增"
+    assert traces[0]["changes"][0]["before_state"] == "empty"
+    assert "会议室公开反击" in traces[0]["changes"][0]["after_excerpt"]

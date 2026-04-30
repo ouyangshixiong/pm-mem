@@ -51,6 +51,23 @@ def get_role_config(role_id: Optional[str]) -> Optional[Dict[str, Any]]:
     return _role_from_path(role_path)
 
 
+def update_role_prompt(role_id: str, prompt: str) -> Dict[str, Any]:
+    """Persist one role prompt back to ``roles/{role_id}.md``."""
+    safe_role_id = Path(str(role_id)).name.replace(".md", "")
+    if not safe_role_id:
+        raise ValueError("role_id is required")
+
+    role_path = _roles_dir() / f"{safe_role_id}.md"
+    if not role_path.is_file():
+        raise FileNotFoundError(f"role prompt not found: {safe_role_id}")
+
+    role_path.write_text(str(prompt or "").strip() + "\n", encoding="utf-8")
+    role = _role_from_path(role_path)
+    if role is None:
+        raise RuntimeError(f"failed to read updated role prompt: {safe_role_id}")
+    return role
+
+
 def get_layer_role_id(layer_id: str) -> str:
     """Return the default configured role for a memory layer."""
     return LAYER_ROLE_ASSIGNMENTS.get(layer_id, "")

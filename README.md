@@ -1,267 +1,236 @@
-# pm-mem: LLM长短记忆管理系统
+# pm-mem
 
-基于ReMem（Self-Evolving Memory for LLM Agents）方法论实现的具备自演化记忆管理能力的LLM Agent系统。
+pm-mem 是一个面向长内容创作和智能体工作流的自演化记忆系统。它以 ReMem（Self-Evolving Memory for LLM Agents）方法论为核心，将 LLM 的记忆从“只追加的上下文记录”扩展为可检索、可编辑、可持久化、可审阅的长期记忆层。
 
-## 项目概述
+项目当前提供两类能力：
 
-pm-mem实现了ReMem方法论的核心思想：让LLM Agent的记忆从静态的只追加结构升级为动态可编辑结构，支持记忆的动态编辑（删除、添加、合并、重标签）、运行时记忆库的主动优化、长短记忆的智能存储与检索。
+- 通用 ReMem Agent：围绕 Think / Refine / Act 循环执行任务，并在运行中检索、更新和沉淀记忆。
+- 短剧创作记忆管理：以六层 Markdown 文件维护作品元数据、核心设定、人物档案、情节脉络、剧本档案和分镜档案，并提供 Web 管理页、外部作品导入和 LLM 检索接口。
 
-## 核心特性
+## Quick Start
 
-- **ReMem主循环**: 实现完整的Think/Refine/Act状态机，支持最大迭代次数限制和强制终止机制
-- **动态记忆编辑**: 支持DELETE/ADD/MERGE/RELABEL四种原子操作，实现严格的Refine命令语法解析
-- **短剧分层记忆**: 新增基于Markdown文件的多作品隔离记忆体系，支持作品元数据、核心设定、人物档案、情节脉络、剧本档案、分镜档案六层管理
-- **Web记忆管理页**: 新增无鉴权FastAPI管理页，可直接创建作品、查看和编辑分层记忆、切换锁定状态
-- **多LLM支持**: 统一OpenAI兼容接口，支持DeepSeek、Kimi、Mimo三种LLM提供商
-- **LLM驱动的检索**: 基于LLM API的文本相关性排序检索，不使用向量数据库和embedding技术
-- **记忆库管理**: 实现MemoryEntry和MemoryBank类，支持序列化和持久化存储
-- **异步与流式**: 支持同步、异步、流式三种调用模式，自动重试机制
-- **配置化**: 支持环境变量配置，提供多提供商API密钥管理
-- **完整测试**: 100%测试通过率，支持多模型验证
+首次使用请从 [quick-start.md](quick-start.md) 开始。该文档包含安装依赖、配置模型、启动 Web 管理页和运行 CLI 的最短路径。
 
-## 技术栈
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+启动后访问：
+
+```text
+http://127.0.0.1:8000
+```
+
+## 技术背景
+
+传统 LLM 应用通常依赖会话上下文、外部 RAG 或简单日志来保存历史信息。这类方案很容易遇到三个问题：
+
+- 上下文窗口有限，旧信息会被截断或遗忘。
+- 只追加的记忆会不断膨胀，重复、冲突和低价值信息难以及时处理。
+- 业务知识与模型推理过程脱节，长期一致性依赖人工反复校对。
+
+pm-mem 的设计目标是让记忆成为可维护的系统资产。Agent 在执行任务时会先检索相关记忆，再判断是否需要 Think（继续推理）、Refine（编辑记忆）或 Act（输出结果）。记忆编辑通过 DELETE、ADD、MERGE、RELABEL 等原子操作完成，使长期记忆可以随着任务反馈持续演化。
+
+在短剧创作场景中，项目进一步把通用记忆机制映射为人类可读的 Markdown 分层记忆。创作者可以直接审阅、修改和锁定关键层，LLM 也可以在生成剧本、分镜或导入外部作品时读取这些稳定记忆。
+
+## 核心架构
+
+```text
+用户任务 / 外部作品 / Web 操作
+        |
+        v
+ReMem Agent
+  - Think: 结合任务与记忆进行内部推理
+  - Refine: 对记忆执行结构化编辑
+  - Act: 输出结果并沉淀新记忆
+        |
+        +-- Memory Store
+        |     - JSON 记忆库
+        |     - Markdown 六层作品记忆
+        |
+        +-- LLM Client
+        |     - DeepSeek
+        |     - Kimi
+        |     - Mimo
+        |     - 本地 OpenAI Responses 兼容服务
+        |
+        +-- Role Prompts
+              - 编剧
+              - 制片人
+              - 分镜师
+              - 一致性校验员
+```
+
+### 主要模块
+
+- `app.py`：FastAPI Web 管理页与 HTTP API。
+- `workflow.py`：短剧创作工作流，负责按角色读取分层记忆并写回结果。
+- `import_coordinator.py`：外部作品导入协调器，将故事、剧本和分镜素材整理为六层记忆。
+- `memory_manager.py`：Markdown 作品目录、分层文件和锁定状态管理。
+- `src/agent/`：ReMem Agent、角色和状态机。
+- `src/memory/`：记忆条目、记忆库、编辑器、检索、持久化与存储后端。
+- `src/llm/`：统一 LLM 接口及 DeepSeek、Kimi、Mimo、本地兼容客户端。
+- `src/config/`：配置加载、环境变量覆盖和 API Key 管理。
+- `roles/`：短剧工作流使用的角色提示词。
+
+## 主要功能
+
+### 自演化记忆 Agent
+
+- Think / Refine / Act 状态循环。
+- 基于 LLM 的文本相关性检索，不依赖向量数据库、embedding 或 reranking 服务。
+- 支持记忆新增、删除、合并和重标签。
+- 支持 JSON 文件持久化，适合轻量部署和版本审阅。
+- 支持执行轨迹记录，便于回看一次任务如何读取、判断和更新记忆。
+
+### 短剧分层记忆
+
+每个作品独立保存在 `works/{WORK_UUID}/` 下，包含固定的六层 Markdown：
+
+- `01_作品元数据层.md`
+- `02_核心设定层.md`
+- `03_人物档案层.md`
+- `04_情节脉络层.md`
+- `05_剧本档案层.md`
+- `06_分镜档案层.md`
+
+这些文件既是系统记忆，也是可人工审核的作品档案。Web 管理页支持创建作品、编辑分层内容、预览 Markdown、锁定关键层和删除作品。
+
+### 外部作品导入
+
+pm-mem 可接收外部系统整理出的故事、剧本和分镜文本，通过角色提示词和 LLM 生成六层 Markdown 记忆。导入接口会保留来源系统、外部作品 ID、来源 URL 和原始 payload，便于后续追溯。
+
+### LLM 记忆检索
+
+系统提供只读检索 API。它会把作品的 Markdown 记忆切成可追溯片段，交给 LLM 逐批判断相关性，并返回 top-k 证据；也可以基于证据生成回答。
+
+## 操作方法
+
+### 启动 Web 管理页
+
+```bash
+uvicorn app:app --host 0.0.0.0 --port 8000
+```
+
+常用入口：
+
+- 首页：`http://127.0.0.1:8000`
+- 系统配置：`http://127.0.0.1:8000/settings`
+- 作品接口：`GET /api/works`
+- 外部导入：`POST /api/import/external-work`
+- 作品检索：`POST /api/works/{work_id}/retrieve`
+
+### 创建并管理作品
+
+1. 打开首页。
+2. 点击“新增作品”，输入作品名称。
+3. 进入作品管理页查看六层记忆。
+4. 进入任一层编辑 Markdown 内容。
+5. 根据需要打开锁定开关，保护已确认的核心设定。
+6. 保存后内容会写回作品目录。
+
+### 运行 CLI
+
+```bash
+python3 -m src.cli run --llm deepseek --task "给出一个标准的 git 提交流程"
+python3 -m src.cli interactive --llm kimi
+```
+
+CLI 默认使用 `./data/memory.json` 作为通用 ReMem 记忆文件，可通过 `--persist` 指定其他路径。
+
+### 调用检索 API
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/retrieve \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "work_name": "作品名称",
+    "query": "当前主要人物和情节概要",
+    "target_layers": ["character_profile", "plot_context"],
+    "include_answer": true
+  }'
+```
+
+### 调用外部作品导入 API
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/import/external-work \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "source_system": "external-system",
+    "external_work_id": "work-001",
+    "work_name": "作品名称",
+    "source_url": "",
+    "story": "故事梗概...",
+    "script": "剧本正文...",
+    "storyboard_script": "分镜脚本..."
+  }'
+```
+
+## 配置
+
+根目录 `config.yaml` 是 Web 管理页和短剧工作流的主要配置文件：
+
+```yaml
+memory:
+  works_dir: "./works"
+  persistence_path: "./data/memory.json"
+
+local_llm:
+  endpoint: "http://localhost:8317/v1/responses"
+  model: "gpt-5.4"
+  api_key: "your-api-key"
+
+deepseek_backup:
+  endpoint: "https://api.deepseek.com/chat/completions"
+  model: "deepseek-v4-pro"
+```
+
+常用环境变量：
+
+- `PM_MEM_WORKS_DIR`：覆盖作品 Markdown 目录。
+- `DEEPSEEK_API_KEY`：DeepSeek API Key。
+- `KIMI_API_KEY`：Kimi API Key。
+- `MIMO_API_KEY`：Mimo API Key。
+- `LLM_TIMEOUT`：CLI LLM 请求超时时间。
+- `LLM_MAX_RETRIES`：CLI LLM 自动重试次数。
+
+## 技术依赖
 
 - Python 3.10+
-- LLM APIs: DeepSeek / Kimi / Mimo (OpenAI兼容接口)
-- JSON文件存储
-- pytest测试框架
-- OpenAI Python SDK (v1.12+)
+- FastAPI
+- Uvicorn
+- Pydantic
+- OpenAI Python SDK
+- Requests
+- PyYAML
+- python-dotenv
+- structlog
 
-## 技术约束
+LLM 接口采用 OpenAI 兼容风格，当前内置 DeepSeek、Kimi、Mimo 以及本地 OpenAI Responses 兼容服务。记忆检索由 LLM 完成，不需要向量数据库或额外 embedding 服务。
 
-- 禁止使用向量数据库、embedding、reranking技术
-- 禁止使用PyTorch、PaddlePaddle等深度学习框架
-- 统一使用OpenAI兼容接口，确保代码可移植性
+## 发布目录建议
 
-## 项目结构
+对外发布时建议保留：
 
-```
-pm-mem/
-├── src/                    # 源代码
-│   ├── agent/             # ReMem Agent核心
-│   ├── memory/            # 记忆管理
-│   ├── llm/               # LLM集成
-│   ├── config/            # 配置管理
-│   └── utils/             # 工具函数
-├── tests/                 # 测试
-├── examples/              # 示例
-├── configs/               # 配置文件
-├── docs/                  # 文档
-└── scripts/               # 脚本
-```
-
-## 快速开始
-
-### 安装
-
-```bash
-# 克隆项目
-git clone <repository-url>
-cd pm-mem
-
-# 创建虚拟环境
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或 venv\Scripts\activate  # Windows
-
-# 安装依赖
-pip install -r requirements.txt
+```text
+app.py
+workflow.py
+import_coordinator.py
+local_llm_client.py
+memory_manager.py
+role_manager.py
+src/
+roles/
+configs/
+config.yaml
+requirements.txt
+pyproject.toml
+quick-start.md
+README.md
 ```
 
-### 配置
-
-1. 复制环境变量示例文件：
-```bash
-cp .env.example .env
-```
-
-2. 在`.env`文件中配置LLM API密钥（至少配置一个）：
-```bash
-# DeepSeek (必需/可选)
-DEEPSEEK_API_KEY=your_deepseek_key_here
-
-# Kimi (可选)
-KIMI_API_KEY=your_kimi_key_here
-KIMI_API_BASE=https://api.moonshot.cn/v1
-KIMI_MODEL=kimi-k2-0905-preview
-
-# Mimo (可选)
-MIMO_API_KEY=your_mimo_key_here
-MIMO_API_BASE=https://api.xiaomimimo.com/v1
-MIMO_MODEL=mimo-v2-flash
-```
-
-3. 根据需要修改配置文件`configs/local.yaml`
-
-### 基本用法
-
-#### 短剧记忆管理 Web 页面
-
-```bash
-uvicorn app:app --reload --host 0.0.0.0 --port 8000
-```
-
-访问 `http://127.0.0.1:8000`。详细说明见 [短剧创作系统使用说明](docs/short_drama_usage.md)。
-
-#### 方式1: 使用 CLI（推荐）
-
-```bash
-# 使用 DeepSeek
-python src/cli.py --llm deepseek --task "如何配置nginx反向代理？"
-
-# 使用 Kimi
-python src/cli.py --llm kimi --task "给出一个标准的git提交流程命令"
-
-# 使用 Mimo
-python src/cli.py --llm mimo --task "检查当前项目的python运行环境"
-```
-
-#### 方式2: 使用 Python API
-
-```python
-from src.llm.deepseek_client import DeepSeekClient
-from src.llm.kimi_client import KimiClient
-from src.agent.remem_agent import ReMemAgent
-
-# 选择 LLM 提供商
-llm_client = DeepSeekClient(api_key="your_api_key")
-# 或 llm_client = KimiClient(api_key="your_kimi_key")
-# 或 llm_client = MimoClient(api_key="your_mimo_key")
-
-# 创建 ReMem Agent
-agent = ReMemAgent(llm_client)
-
-# 运行任务
-result = agent.run_task("如何配置nginx反向代理？")
-print(result["action"])
-```
-
-#### 方式3: 使用 LLM 工厂
-
-```python
-from src.llm.llm_factory import LLMFactory
-
-# 通过工厂创建客户端
-factory = LLMFactory()
-llm_client = factory.create("kimi", environment="production")
-
-# 或从环境变量自动配置
-from src.llm.kimi_client_enhanced import EnhancedKimiClient
-llm_client = EnhancedKimiClient.from_env()
-```
-
-## 开发指南
-
-### 运行测试
-
-```bash
-# 运行所有测试
-pytest tests/
-
-# 运行单元测试
-pytest tests/unit/
-
-# 运行集成测试
-pytest tests/integration/
-
-# 生成测试覆盖率报告
-pytest --cov=src tests/
-```
-
-### 代码规范
-
-项目遵循PEP 8规范，使用black进行代码格式化：
-
-```bash
-# 格式化代码
-black src/ tests/
-
-# 检查代码风格
-flake8 src/ tests/
-```
-
-## 支持的 LLM 提供商
-
-| 提供商 | 模型 | 上下文窗口 | 状态 | CLI 参数 |
-|--------|------|------------|------|----------|
-| DeepSeek | deepseek-reasoner | 64K | ✅ 已验证 | `--llm deepseek` |
-| Kimi | kimi-k2-0905-preview | 128K | ✅ 已验证 | `--llm kimi` |
-| Mimo | mimo-v2-flash | 32K | ✅ 已验证 | `--llm mimo` |
-| Mock | mock-llm | N/A | ✅ 开发测试 | `--llm mock` |
-
-### 测试验证
-
-所有 LLM 提供商都通过了相同的测试套件：
-
-- **Git 工作流测试**: 3/3 ✅
-- **Nginx 健康检查测试**: 3/3 ✅
-- **Python 环境测试**: 3/3 ✅
-
-详细测试报告：
-- [Kimi 测试报告](docs/pm-mem-self-evolving-memory-test-report-kimi.md)
-- [Mimo 测试报告](docs/pm-mem-self-evolving-memory-test-report-mimo.md)
-
-## 功能特性
-
-### LLM 客户端功能
-
-- ✅ **同步调用**: 基础 API 调用
-- ✅ **异步调用**: `async_call()` 支持并发
-- ✅ **流式响应**: `stream_call()` 实时输出
-- ✅ **自动重试**: 指数退避策略（最大 3 次）
-- ✅ **超时控制**: 可配置超时时间
-- ✅ **错误处理**: 完善的异常分类
-- ✅ **统计追踪**: Token 消耗和延迟统计
-
-### 记忆系统功能
-
-- ✅ **动态编辑**: DELETE/ADD/MERGE/RELABEL 操作
-- ✅ **智能检索**: LLM 驱动的相关性排序
-- ✅ **持久化**: JSON 文件存储
-- ✅ **备份机制**: 自动备份和恢复
-- ✅ **记忆去重**: 防止重复条目
-
-## 需求实现状态
-
-### 核心功能（P0）✅
-- [x] REQ-001: ReMem主循环实现
-- [x] REQ-002: 记忆检索模块
-- [x] REQ-003: 记忆编辑模块
-
-### 存储与持久化（P1）✅
-- [x] REQ-004: 记忆条目数据结构
-- [x] REQ-005: 记忆库管理
-- [x] REQ-006: 持久化存储
-
-### LLM集成（P1）✅
-- [x] REQ-007: DeepSeek API集成
-- [x] REQ-008: Kimi API集成
-- [x] REQ-009: Mimo API集成
-- [x] REQ-010: 提示词模板系统
-
-### 系统控制（P2）✅
-- [x] REQ-011: 配置管理系统
-- [x] REQ-012: 日志与监控
-
-### 测试与质量（P2）✅
-- [x] REQ-013: 单元测试套件
-- [x] REQ-014: 集成测试套件
-- [x] REQ-015: 多模型验证
-
-## 文档
-
-- [API文档](docs/api.md)
-- [使用指南](docs/usage.md)
-- [架构设计](docs/architecture.md)
-
-## 许可证
-
-本项目基于MIT许可证发布，详见[LICENSE](LICENSE)文件。
-
-## 贡献
-
-欢迎提交Issue和Pull Request。请确保代码符合项目规范并通过所有测试。
-
-## 致谢
-
-本项目基于ReMem（Self-Evolving Memory for LLM Agents）方法论实现，感谢相关研究者的工作。
+运行后产生的 `data/`、`works/`、`logs/`、缓存目录和本地密钥文件不应提交到公开仓库。

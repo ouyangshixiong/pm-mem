@@ -7,7 +7,7 @@ name = "pm-mem"
 version = "0.1.0"
 description = "LLM长短记忆管理系统 - 基于ReMem方法论的自演化记忆Agent"
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Context Engineering Team", email = "team@example.com"}
@@ -32,45 +32,10 @@ dependencies = [
     "uvicorn>=0.22.0,<0.23.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-    "pytest-mock>=3.11.0",
-    "httpx>=0.24.0,<0.25.0",
-    "black>=23.0.0",
-    "flake8>=5.0.0,<6.0.0",
-    "mypy>=1.4.0,<1.5.0",
-]
-
 [project.urls]
 Homepage = "https://github.com/your-org/pm-mem"
 Repository = "https://github.com/your-org/pm-mem"
 Issues = "https://github.com/your-org/pm-mem/issues"
-
-[tool.black]
-line-length = 88
-target-version = ['py310']
-
-[tool.flake8]
-max-line-length = 88
-extend-ignore = ["E203"]
-
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-addopts = [
-    "--strict-markers",
-    "--strict-config",
-    "--tb=short",
-]
 
 [project.scripts]
 pm-mem = "src.cli:main"

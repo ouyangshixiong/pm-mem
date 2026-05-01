@@ -116,13 +116,6 @@ def _interactive(args: argparse.Namespace) -> int:
     return 0
 
 
-def _demo(_: argparse.Namespace) -> int:
-    from examples.basic_usage import basic_usage_example
-
-    basic_usage_example()
-    return 0
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(prog="pm-mem")
     subparsers = parser.add_subparsers(dest="cmd")
@@ -138,9 +131,6 @@ def main() -> int:
 
     p_inter = subparsers.add_parser("interactive", parents=[common])
     p_inter.set_defaults(func=_interactive)
-
-    p_demo = subparsers.add_parser("demo")
-    p_demo.set_defaults(func=_demo)
 
     args = parser.parse_args()
     if not getattr(args, "cmd", None):

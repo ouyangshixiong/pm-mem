@@ -86,12 +86,6 @@ monitoring:
   metrics_path: "./data/metrics.json"
   report_interval: 60  # 秒
 
-# 测试配置
-testing:
-  use_mock_llm: false
-  test_data_path: "./tests/data"
-  coverage_target: 0.85
-
 # 高级配置（通常不需要修改）
 advanced:
   # 记忆检索配置
@@ -120,15 +114,6 @@ environments:
       level: "DEBUG"
     monitoring:
       enable: true
-
-  testing:
-    llm:
-      provider: "deepseek"
-    logging:
-      level: "INFO"
-      file_path: "./logs/pm-mem-test.log"
-    memory:
-      persistence_path: "./data/memory-test.json"
 
   production:
     llm:

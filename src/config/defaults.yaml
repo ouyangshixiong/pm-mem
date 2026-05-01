@@ -49,9 +49,3 @@ monitoring:
   collect_metrics: true
   metrics_path: "./data/metrics.json"
   report_interval: 60  # 秒
-
-# 测试配置
-testing:
-  use_mock_llm: false
-  test_data_path: "./tests/data"
-  coverage_target: 0.85

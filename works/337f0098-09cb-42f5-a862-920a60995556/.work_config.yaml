@@ -1,0 +1,12 @@
+work_id: 337f0098-09cb-42f5-a862-920a60995556
+work_name: 职场见闻
+create_time: '2026-05-01 17:59:29'
+update_time: '2026-05-01 17:59:30'
+status: active
+layer_lock_status:
+  01_作品元数据层: false
+  02_核心设定层: false
+  03_人物档案层: false
+  04_情节脉络层: false
+  05_剧本档案层: false
+  06_分镜档案层: false

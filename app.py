@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import yaml
@@ -175,12 +175,22 @@ def api_get_layer(work_id: str, layer_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@app.put("/api/works/{work_id}/layers/{layer_id}")
+@app.put("/api/internal/works/{work_id}/layers/{layer_id}", include_in_schema=False)
 def api_update_layer(
     work_id: str,
     layer_id: str,
     payload: UpdateLayerRequest,
+    x_pm_mem_internal: Optional[str] = Header(default=None, alias="X-PM-MEM-Internal"),
 ) -> Dict[str, Any]:
+    if x_pm_mem_internal != "web-ui":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "layer write API is internal-only; use /api/works/{work_id}/remem-task "
+                "for creative memory updates"
+            ),
+        )
+
     try:
         success = memory_manager.update_layer_content(
             work_id=work_id,
@@ -623,6 +633,11 @@ def _layout(title: str, body: str, script: str) -> str:
         throw new Error(detail);
       }}
       return data;
+    }}
+    async function requestInternalJson(url, options = {{}}) {{
+      const headers = new Headers(options.headers || {{}});
+      headers.set('X-PM-MEM-Internal', 'web-ui');
+      return requestJson(url, {{...options, headers}});
     }}
     function renderMarkdown(source) {{
       let text = escapeHtml(source);
@@ -1252,7 +1267,7 @@ async function loadLayer() {{
 }}
 async function saveLayer(silent) {{
   try {{
-    await requestJson('/api/works/' + encodeURIComponent(WORK_ID) + '/layers/' + encodeURIComponent(LAYER_ID), {{
+    await requestInternalJson('/api/internal/works/' + encodeURIComponent(WORK_ID) + '/layers/' + encodeURIComponent(LAYER_ID), {{
       method: 'PUT',
       headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{content: editor.value, locked: lockSwitch.checked}})

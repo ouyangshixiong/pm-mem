@@ -122,6 +122,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 - 作品接口：`GET /api/works`
 - 外部导入：`POST /api/import/external-work`
 - 作品检索：`POST /api/works/{work_id}/retrieve`
+- ReMem 创作任务：`POST /api/works/{work_id}/remem-task`
 
 ### 创建并管理作品
 
@@ -131,6 +132,22 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 4. 进入任一层编辑 Markdown 内容。
 5. 根据需要打开锁定开关，保护已确认的核心设定。
 6. 保存后内容会写回作品目录。
+
+### 创作记忆写入约束
+
+外部系统或智能体需要写入、更新、沉淀创作记忆时，必须使用 ReMem 任务接口：
+
+```text
+POST /api/works/{work_id}/remem-task
+```
+
+或使用外部作品导入接口：
+
+```text
+POST /api/import/external-work
+```
+
+不要直接调用层级 Markdown 写入接口，例如 `PUT /api/works/{work_id}/layers/{layer_id}` 或类似路径来做创作记忆写入。直接改层文件会绕开 ReMem Agent 的 Think / Refine / Act、LLM 检索、冲突判断和记忆演化轨迹，只适合作品管理页内部进行人工维护。
 
 ### 运行 CLI
 

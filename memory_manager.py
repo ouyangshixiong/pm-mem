@@ -764,32 +764,208 @@ def _extract_json_memory_updates(llm_output: str) -> List[Dict[str, str]]:
         except json.JSONDecodeError:
             continue
 
-        raw_updates = data.get("memory_updates") if isinstance(data, dict) else None
-        if raw_updates is None and isinstance(data, dict):
-            raw_updates = [
-                {"layer_id": key, "content": value, "mode": "append"}
+        if not isinstance(data, dict):
+            continue
+
+        normalized = []
+        raw_updates = data.get("memory_updates")
+        if isinstance(raw_updates, list):
+            normalized.extend(
+                item
+                for item in (_normalize_memory_update_item(update) for update in raw_updates)
+                if item
+            )
+
+        raw_operations = data.get("memory_operations") or data.get("operations")
+        if raw_operations is None and _is_memory_operations_wrapper(data):
+            raw_operations = data.get("content")
+        if isinstance(raw_operations, list):
+            normalized.extend(
+                item
+                for item in (
+                    _normalize_memory_operation_item(operation)
+                    for operation in raw_operations
+                )
+                if item
+            )
+
+        if not normalized:
+            normalized.extend(
+                {
+                    "layer_id": key,
+                    "content": value.strip(),
+                    "mode": "append",
+                }
                 for key, value in data.items()
                 if key in _LAYER_BY_ID and isinstance(value, str)
-            ]
-        if isinstance(raw_updates, list):
-            normalized = []
-            for item in raw_updates:
-                if not isinstance(item, dict):
-                    continue
-                layer_id = _normalize_layer_ref(str(item.get("layer_id", "")))
-                content = item.get("content", "")
-                mode = item.get("mode", "append")
-                if layer_id and isinstance(content, str):
-                    normalized.append(
-                        {
-                            "layer_id": layer_id,
-                            "content": content.strip(),
-                            "mode": "replace" if mode == "replace" else "append",
-                        }
-                    )
-            if normalized:
-                return normalized
+            )
+
+        if normalized:
+            return normalized
     return []
+
+
+def _normalize_memory_update_item(item: Any) -> Optional[Dict[str, str]]:
+    if not isinstance(item, dict):
+        return None
+    layer_id = _normalize_layer_ref(str(item.get("layer_id", "")))
+    content = item.get("content", "")
+    mode = item.get("mode", "append")
+    if not layer_id:
+        return None
+    content_text = _markdown_content_from_value(content, str(item.get("path", "")).strip())
+    if not content_text:
+        return None
+    return {
+        "layer_id": layer_id,
+        "content": content_text,
+        "mode": "replace" if mode == "replace" else "append",
+    }
+
+
+def _is_memory_operations_wrapper(data: Dict[str, Any]) -> bool:
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    target = str(
+        data.get("target")
+        or metadata.get("layer_id")
+        or metadata.get("target_layer")
+        or ""
+    ).strip()
+    operation_type = str(data.get("operation_type") or data.get("operation") or "").lower()
+    return (
+        target == "memory_operations"
+        or operation_type in {"refine", "memory_operations"}
+    ) and isinstance(data.get("content"), list)
+
+
+def _normalize_memory_operation_item(item: Any) -> Optional[Dict[str, str]]:
+    if not isinstance(item, dict):
+        return None
+    operation_type = str(
+        item.get("operation_type")
+        or item.get("operation")
+        or item.get("type")
+        or item.get("mode")
+        or "append"
+    ).strip().lower()
+    if operation_type in {"no_op", "noop", "none"}:
+        return None
+    if operation_type not in {"add", "append", "replace", "merge"}:
+        return None
+
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    layer_id = _normalize_layer_ref(
+        str(
+            item.get("layer_id")
+            or item.get("layer")
+            or metadata.get("layer_id")
+            or metadata.get("target_layer")
+            or item.get("target")
+            or ""
+        )
+    )
+    if not layer_id:
+        return None
+
+    content = item.get("content")
+    if content is None and "value" in item:
+        content = item.get("value")
+    content_text = _markdown_content_from_value(
+        content,
+        str(item.get("path") or metadata.get("path") or "").strip(),
+    )
+    if not content_text:
+        return None
+    return {
+        "layer_id": layer_id,
+        "content": content_text,
+        "mode": "replace" if operation_type == "replace" else "append",
+    }
+
+
+def _markdown_content_from_value(value: Any, heading: str = "") -> str:
+    heading = heading.strip()
+    if isinstance(value, str):
+        content = value.strip()
+        if heading and not content.startswith("#"):
+            return f"### {heading}\n\n{content}" if content else f"### {heading}"
+        return content
+    if isinstance(value, list):
+        body = "\n".join(_markdown_lines_from_list(value)).strip()
+        return f"### {heading}\n\n{body}" if heading else body
+    if isinstance(value, dict):
+        local_heading = str(
+            heading
+            or value.get("path")
+            or value.get("entry")
+            or value.get("title")
+            or value.get("name")
+            or ""
+        ).strip()
+        content_value = (
+            value.get("content")
+            if "content" in value
+            else value.get("facts")
+            if "facts" in value
+            else value.get("items")
+            if "items" in value
+            else None
+        )
+        lines = []
+        if local_heading:
+            lines.extend([f"### {local_heading}", ""])
+        if value.get("type"):
+            lines.extend([f"类型：{value.get('type')}", ""])
+        if content_value is not None:
+            if isinstance(content_value, list):
+                lines.extend(_markdown_lines_from_list(content_value))
+            elif isinstance(content_value, dict):
+                lines.extend(_markdown_lines_from_dict(content_value))
+            else:
+                lines.append(str(content_value).strip())
+        else:
+            visible = {
+                key: item
+                for key, item in value.items()
+                if key not in {"path", "entry", "title", "name", "type"}
+            }
+            lines.extend(_markdown_lines_from_dict(visible))
+        return "\n".join(line for line in lines).strip()
+    return str(value or "").strip()
+
+
+def _markdown_lines_from_list(items: List[Any]) -> List[str]:
+    lines = []
+    for item in items:
+        if isinstance(item, dict):
+            lines.extend(_markdown_lines_from_dict(item))
+        elif isinstance(item, list):
+            lines.extend(_markdown_lines_from_list(item))
+        else:
+            text = str(item).strip()
+            if text:
+                lines.append(f"- {text}")
+    return lines
+
+
+def _markdown_lines_from_dict(value: Dict[str, Any]) -> List[str]:
+    lines = []
+    for key, item in value.items():
+        if item is None or item == "":
+            continue
+        label = str(key).strip()
+        if isinstance(item, list):
+            lines.append(f"- {label}：")
+            lines.extend(
+                f"  {line}" if line.startswith("- ") else f"  - {line}"
+                for line in _markdown_lines_from_list(item)
+            )
+        elif isinstance(item, dict):
+            lines.append(f"- {label}：")
+            lines.extend(f"  {line}" for line in _markdown_lines_from_dict(item))
+        else:
+            lines.append(f"- {label}：{str(item).strip()}")
+    return lines
 
 
 def _extract_tag_memory_updates(llm_output: str) -> List[Dict[str, str]]:

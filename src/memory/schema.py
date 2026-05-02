@@ -65,20 +65,38 @@ class MemoryOperation:
 
     operation_type: str
     target: str = ""
-    content: str = ""
+    content: Any = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, value: Dict[str, Any]) -> "MemoryOperation":
         if not isinstance(value, dict):
             raise TypeError("memory operation must be a dict")
+        metadata = dict(value.get("metadata") or {})
+        if value.get("layer") and not metadata.get("layer_id"):
+            metadata["layer_id"] = value.get("layer")
+        if value.get("layer_id") and not metadata.get("layer_id"):
+            metadata["layer_id"] = value.get("layer_id")
+        if value.get("path") and not metadata.get("path"):
+            metadata["path"] = value.get("path")
+        operation_type = (
+            value.get("operation_type")
+            or value.get("operation")
+            or value.get("type")
+            or value.get("mode")
+            or "no_op"
+        )
+        target = value.get("target") or value.get("layer") or ""
+        content = value.get("content")
+        if content is None and "value" in value:
+            content = value.get("value")
+        if content is None:
+            content = ""
         return cls(
-            operation_type=str(
-                value.get("operation_type") or value.get("type") or "no_op"
-            ).strip().lower(),
-            target=str(value.get("target") or ""),
-            content=str(value.get("content") or ""),
-            metadata=dict(value.get("metadata") or {}),
+            operation_type=str(operation_type).strip().lower(),
+            target=str(target),
+            content=content,
+            metadata=metadata,
         )
 
     def to_dict(self) -> Dict[str, Any]:

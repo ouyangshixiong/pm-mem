@@ -108,7 +108,7 @@ class JsonMemoryStore(MemoryStore):
                 if op_type in {"add", "append"}:
                     entry = MemoryEntry(
                         x=context.task_type,
-                        y=operation.content,
+                        y=_operation_markdown_content(operation),
                         feedback="refine",
                         tag=str(operation.metadata.get("tag") or "refine"),
                     )
@@ -176,7 +176,7 @@ class JsonMemoryStore(MemoryStore):
                 elif op_type == "flag_conflict":
                     entry = MemoryEntry(
                         x=context.task_type,
-                        y=operation.content,
+                        y=_operation_markdown_content(operation),
                         feedback="conflict",
                         tag="conflict",
                     )
@@ -251,11 +251,11 @@ class JsonMemoryStore(MemoryStore):
         entry_id = operation.metadata.get("entry_id") or target
         index = operation.metadata.get("index")
         if isinstance(index, int):
-            self.memory_bank.entries[index].y = operation.content
+            self.memory_bank.entries[index].y = _operation_markdown_content(operation)
             return
         for entry in self.memory_bank.entries:
             if entry.id == entry_id:
-                entry.y = operation.content
+                entry.y = _operation_markdown_content(operation)
                 return
         raise ValueError(f"entry not found: {entry_id}")
 
@@ -393,7 +393,16 @@ class MarkdownLayerMemoryStore(MemoryStore):
                     result["skipped"].append(conflict)
                     continue
 
-                next_content = self._next_layer_content(current["content"], operation)
+                operation_text = _operation_markdown_content(operation)
+                result_operation = MemoryOperation(
+                    operation_type=operation.operation_type,
+                    target=operation.target,
+                    content=operation_text,
+                    metadata=dict(operation.metadata),
+                )
+                next_content = self._next_layer_content(
+                    current["content"], operation_text, operation
+                )
                 memory_manager.update_layer_content(
                     work_id=_work_id(context),
                     layer_id=layer_id,
@@ -403,12 +412,12 @@ class MarkdownLayerMemoryStore(MemoryStore):
                 )
                 result["applied_operations"].append(
                     _operation_result(
-                        operation,
+                        result_operation,
                         "applied",
                         {
                             "work_id": _work_id(context),
                             "layer_id": layer_id,
-                            "content_length": len(operation.content),
+                            "content_length": len(operation_text),
                         },
                     )
                 )
@@ -495,8 +504,13 @@ class MarkdownLayerMemoryStore(MemoryStore):
             return target_layers[0]
         return None
 
-    def _next_layer_content(self, current_content: str, operation: MemoryOperation) -> str:
-        content = operation.content.strip()
+    def _next_layer_content(
+        self,
+        current_content: str,
+        content: str,
+        operation: MemoryOperation,
+    ) -> str:
+        content = str(content or "").strip()
         mode = operation.metadata.get("mode") or operation.operation_type
         if mode == "replace" or operation.operation_type == "replace":
             return content
@@ -788,6 +802,98 @@ def _strip_act_prefix(text: str) -> str:
     return stripped
 
 
+def _operation_markdown_content(operation: MemoryOperation) -> str:
+    heading = str(operation.metadata.get("path") or "").strip()
+    return _structured_value_to_markdown(operation.content, heading=heading)
+
+
+def _structured_value_to_markdown(value: Any, heading: str = "") -> str:
+    if isinstance(value, str):
+        content = value.strip()
+        if heading and not content.startswith("#"):
+            return f"### {heading}\n\n{content}" if content else f"### {heading}"
+        return content
+    if isinstance(value, list):
+        lines = _markdown_lines_from_list(value)
+        body = "\n".join(lines).strip()
+        return f"### {heading}\n\n{body}" if heading else body
+    if isinstance(value, dict):
+        local_heading = str(
+            heading
+            or value.get("path")
+            or value.get("entry")
+            or value.get("title")
+            or value.get("name")
+            or ""
+        ).strip()
+        content_value = (
+            value.get("content")
+            if "content" in value
+            else value.get("facts")
+            if "facts" in value
+            else value.get("items")
+            if "items" in value
+            else None
+        )
+        lines: List[str] = []
+        if local_heading:
+            lines.append(f"### {local_heading}")
+            lines.append("")
+        if value.get("type"):
+            lines.append(f"类型：{value.get('type')}")
+            lines.append("")
+        if content_value is not None:
+            if isinstance(content_value, list):
+                lines.extend(_markdown_lines_from_list(content_value))
+            elif isinstance(content_value, dict):
+                lines.extend(_markdown_lines_from_dict(content_value))
+            else:
+                lines.append(str(content_value).strip())
+        else:
+            visible = {
+                key: item
+                for key, item in value.items()
+                if key not in {"path", "entry", "title", "name", "type"}
+            }
+            lines.extend(_markdown_lines_from_dict(visible))
+        return "\n".join(line for line in lines).strip()
+    return str(value).strip()
+
+
+def _markdown_lines_from_list(items: List[Any]) -> List[str]:
+    lines = []
+    for item in items:
+        if isinstance(item, dict):
+            lines.extend(_markdown_lines_from_dict(item))
+        elif isinstance(item, list):
+            lines.extend(_markdown_lines_from_list(item))
+        else:
+            text = str(item).strip()
+            if text:
+                lines.append(f"- {text}")
+    return lines
+
+
+def _markdown_lines_from_dict(value: Dict[str, Any]) -> List[str]:
+    lines = []
+    for key, item in value.items():
+        if item is None or item == "":
+            continue
+        label = str(key).strip()
+        if isinstance(item, list):
+            lines.append(f"- {label}：")
+            lines.extend(
+                f"  {line}" if line.startswith("- ") else f"  - {line}"
+                for line in _markdown_lines_from_list(item)
+            )
+        elif isinstance(item, dict):
+            lines.append(f"- {label}：")
+            lines.extend(f"  {line}" for line in _markdown_lines_from_dict(item))
+        else:
+            lines.append(f"- {label}：{str(item).strip()}")
+    return lines
+
+
 def _work_id(context) -> str:
     work_id = context.metadata.get("work_id")
     if not work_id:
@@ -815,7 +921,66 @@ def _extract_json_memory_updates(text: str) -> List[Dict[str, Any]]:
         updates = data.get("memory_updates")
         if isinstance(updates, list):
             return [item for item in updates if isinstance(item, dict)]
+        operations = data.get("memory_operations") or data.get("operations")
+        if operations is None and _is_memory_operations_wrapper(data):
+            operations = data.get("content")
+        if isinstance(operations, list):
+            normalized = []
+            for item in operations:
+                if not isinstance(item, dict):
+                    continue
+                update = _update_from_memory_operation(item)
+                if update:
+                    normalized.append(update)
+            return normalized
     return []
+
+
+def _is_memory_operations_wrapper(data: Dict[str, Any]) -> bool:
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    target = str(
+        data.get("target")
+        or metadata.get("layer_id")
+        or metadata.get("target_layer")
+        or ""
+    ).strip()
+    operation_type = str(data.get("operation_type") or data.get("operation") or "").lower()
+    return (
+        target == "memory_operations"
+        or operation_type in {"refine", "memory_operations"}
+    ) and isinstance(data.get("content"), list)
+
+
+def _update_from_memory_operation(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    layer_id = (
+        item.get("layer_id")
+        or item.get("layer")
+        or metadata.get("layer_id")
+        or metadata.get("target_layer")
+        or item.get("target")
+        or ""
+    )
+    operation_type = str(
+        item.get("operation_type")
+        or item.get("operation")
+        or item.get("type")
+        or item.get("mode")
+        or "append"
+    ).strip().lower()
+    if operation_type in {"no_op", "noop", "none"}:
+        return None
+    content = item.get("content")
+    if content is None and "value" in item:
+        content = item.get("value")
+    return {
+        "layer_id": layer_id,
+        "content": _structured_value_to_markdown(
+            content,
+            heading=str(item.get("path") or metadata.get("path") or "").strip(),
+        ),
+        "mode": "replace" if operation_type == "replace" else "append",
+    }
 
 
 def new_task_id() -> str:

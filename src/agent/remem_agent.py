@@ -644,7 +644,7 @@ Refine: 请根据当前任务、检索记忆和角色约束，生成记忆演化
     {{
       "operation_type": "append",
       "target": "memory.layer",
-      "content": "需要写入或标记的内容",
+      "content": "需要写入或标记的 Markdown 正文，不要把 memory_operations JSON 当作正文写入",
       "metadata": {{"layer_id": "由存储后端解释的目标"}}
     }}
   ]
@@ -683,6 +683,8 @@ Refine: 请根据当前任务、检索记忆和角色约束，生成记忆演化
                 or json_data.get("operations")
                 or json_data.get("memory_updates")
             )
+            if raw_operations is None and self._is_memory_operations_wrapper(json_data):
+                raw_operations = json_data.get("content")
             if isinstance(raw_operations, list):
                 parsed = []
                 for item in raw_operations:
@@ -709,6 +711,26 @@ Refine: 请根据当前任务、检索记忆和角色约束，生成记忆演化
         except Exception:
             return []
         return self._delta_to_operations(delta)
+
+    def _is_memory_operations_wrapper(self, json_data: Dict[str, Any]) -> bool:
+        metadata = (
+            json_data.get("metadata")
+            if isinstance(json_data.get("metadata"), dict)
+            else {}
+        )
+        target = str(
+            json_data.get("target")
+            or metadata.get("layer_id")
+            or metadata.get("target_layer")
+            or ""
+        ).strip()
+        operation_type = str(
+            json_data.get("operation_type") or json_data.get("operation") or ""
+        ).lower()
+        return (
+            target == "memory_operations"
+            or operation_type in {"refine", "memory_operations"}
+        ) and isinstance(json_data.get("content"), list)
 
     def _parse_legacy_refine_delta(self, raw_output: str) -> Dict[str, Any]:
         """Parse legacy RefineEditor commands while preserving semicolons in ADD{}."""

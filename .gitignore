@@ -60,6 +60,7 @@ coverage.xml
 # Project specific
 .trae/
 data/
+works/
 development-tasks.md
 quality-tasks.md
 quality_validation_report*.md
